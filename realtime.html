@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SurrealLens V7 Live</title>
+<style>
+:root { --bg:#0b0b0d; --fg:#ecebe6; --dim:#8d8b84; --line:#2a2a2e; --ok:#9bd3a0; --warn:#e6c07a; --bad:#e08a8a; }
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display:flex; flex-direction:column; padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom); gap:12px; }
+header { display:flex; align-items:center; justify-content:space-between; padding-top:12px; }
+h1 { font-size:16px; font-weight:600; margin:0; letter-spacing:.02em; }
+button { font:inherit; color:var(--fg); background:#1b1b1f; border:1px solid var(--line); border-radius:10px; padding:10px 16px; }
+button.primary { background:var(--fg); color:#111; border-color:var(--fg); font-weight:600; }
+button:disabled { opacity:.45; }
+.stage { position:relative; width:100%; max-width:640px; margin:0 auto; aspect-ratio:1; background:#000; border-radius:14px; overflow:hidden; border:1px solid var(--line); }
+.stage img, .stage video, .stage canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+#cam { opacity:0; pointer-events:none; }
+#out { opacity:0; }
+.stage.live #out { opacity:1; }
+.stage:not(.live) #cam, .stage:not(.live) #fakeCv { opacity:1; }
+#fakeCv { opacity:0; }
+.pip { position:absolute; right:8px; bottom:8px; width:26%; aspect-ratio:1; border:1px solid rgba(255,255,255,.4); border-radius:8px; overflow:hidden; display:none; background:#000; }
+.stage.live .pip { display:block; }
+.pip canvas { width:100%; height:100%; object-fit:cover; }
+.row { max-width:640px; width:100%; margin:0 auto; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.row.sp { justify-content:space-between; }
+label { color:var(--dim); font-size:13px; display:flex; align-items:center; gap:8px; }
+input[type=range] { width:120px; }
+input[type=text], input[type=password], input[type=url] { width:100%; font:inherit; color:var(--fg); background:#141417; border:1px solid var(--line); border-radius:8px; padding:10px; }
+pre { margin:0; font:12px/1.5 ui-monospace, Consolas, monospace; color:var(--dim); white-space:pre-wrap; }
+#msg { color:var(--warn); min-height:1.4em; font-size:13px; }
+#verdict.ok { color:var(--ok); } #verdict.warn { color:var(--warn); } #verdict.bad { color:var(--bad); }
+#cfg { display:none; max-width:640px; width:100%; margin:0 auto; }
+#cfg.on { display:grid; gap:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SurrealLens V7 · Live</h1>
+  <button id="gear" aria-label="Connection settings">⚙</button>
+</header>
+
+<div id="cfg">
+  <input id="cfgUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://surreallens-lcm-proxy.xxx.workers.dev">
+  <input id="cfgToken" type="password" autocomplete="off" placeholder="Access token">
+  <button id="cfgSave">Save</button>
+</div>
+
+<div class="stage" id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="fakeCv" width="512" height="512"></canvas>
+  <img id="out" alt="">
+  <div class="pip"><canvas id="pip" width="128" height="128"></canvas></div>
+</div>
+
+<div class="row sp">
+  <button id="go" class="primary">Start</button>
+  <span id="verdict" class="warn">idle</span>
+</div>
+<div class="row">
+  <label>Strength <input id="strength" type="range" min="0.3" max="1" step="0.05" value="0.7"> <span id="strengthV">0.70</span></label>
+  <label>Steps <input id="steps" type="range" min="2" max="8" step="1" value="4"> <span id="stepsV">4</span></label>
+  <label><input id="fixSeed" type="checkbox" checked> fixed seed</label>
+</div>
+<div class="row"><div id="msg"></div></div>
+<div class="row"><pre id="stats"></pre></div>
+
+<script type="module">
+// ---------- 固定設定（先不用標籤提示詞，提示詞固定） ----------
+const PROMPT = 'a dreamlike scene where ordinary objects slowly turn into flowing sand and glass, strange quiet atmosphere, surreal photography, muted warm colors, cinematic, highly detailed';
+const NEGATIVE = 'text, watermark, organs, flesh, vines, tendrils, roots, plants';
+const APP = 'fal-ai/fast-lcm-diffusion/image-to-image';
+const SIDE = 512;            // 官方說 512 最快
+const MAX_INFLIGHT = 2;      // 同時最多幾張在路上（再多只會堆積延遲）
+const MIN_GAP_MS = 60;       // 兩次送出最短間隔
+const STALL_MS = 1000;       // 兩張結果之間超過這麼久，算一次卡頓
+const SEED = 42;
+const DEFAULT_WORKER_URL = 'https://surreallens-lcm-proxy.surreallens-amily.workers.dev';
+const CFG_URL_KEY = 'surreallens_v7_fal_url';
+const CFG_TOKEN_KEY = 'surreallens_v7_fal_token';
+const FAKE = new URLSearchParams(location.search).has('fake');   // 不連 fal，用假的串流驗證流程與統計
+
+const $ = id => document.getElementById(id);
+const stage = $('stage'), cam = $('cam'), out = $('out'), fakeCv = $('fakeCv'), pip = $('pip');
+
+// ---------- 連線設定（和 index.html 共用同一組） ----------
+function loadCfg() {
+  try {
+    const h = new URLSearchParams(location.hash.slice(1)).get('t');
+    if (h) { localStorage.setItem(CFG_TOKEN_KEY, h); history.replaceState(null, '', location.pathname + location.search); }
+    return { url: (localStorage.getItem(CFG_URL_KEY) || '').trim() || DEFAULT_WORKER_URL, token: localStorage.getItem(CFG_TOKEN_KEY) || '' };
+  } catch (e) { return { url: DEFAULT_WORKER_URL, token: '' }; }
+}
+$('gear').onclick = () => { const c = loadCfg(); $('cfgUrl').value = c.url; $('cfgToken').value = c.token; $('cfg').classList.toggle('on'); };
+$('cfgSave').onclick = () => {
+  try { localStorage.setItem(CFG_URL_KEY, $('cfgUrl').value.trim()); localStorage.setItem(CFG_TOKEN_KEY, $('cfgToken').value); } catch (e) {}
+  $('cfg').classList.remove('on'); say('Saved.');
+};
+$('strength').oninput = e => $('strengthV').textContent = (+e.target.value).toFixed(2);
+$('steps').oninput = e => $('stepsV').textContent = e.target.value;
+
+function say(t) { $('msg').textContent = t || ''; }
+
+// ---------- 畫面來源：鏡頭，或假模式的合成畫面 ----------
+let stream = null, fakeTimer = 0;
+async function openSource() {
+  if (FAKE) {
+    const g = fakeCv.getContext('2d'); let t = 0;
+    fakeTimer = setInterval(() => {
+      t += 1;
+      g.fillStyle = '#222'; g.fillRect(0, 0, SIDE, SIDE);
+      g.fillStyle = `hsl(${(t * 4) % 360} 60% 55%)`; g.beginPath(); g.arc(256 + 160 * Math.cos(t / 12), 256 + 160 * Math.sin(t / 9), 60, 0, 7); g.fill();
+      g.fillStyle = '#fff'; g.font = '28px sans-serif'; g.fillText('fake frame ' + t, 20, 40);
+    }, 33);
+    return fakeCv;
+  }
+  stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  cam.srcObject = stream; await cam.play();
+  return cam;
+}
+function closeSource() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; cam.srcObject = null; clearInterval(fakeTimer);
+}
+const grab = document.createElement('canvas'); grab.width = grab.height = SIDE;
+const gctx = grab.getContext('2d');
+function grabFrame(src) {
+  const sw = src.videoWidth || src.width, sh = src.videoHeight || src.height;
+  if (!sw || !sh) return null;
+  const s = Math.min(sw, sh), sx = (sw - s) / 2, sy = (sh - s) / 2;     // 置中裁成正方形
+  gctx.drawImage(src, sx, sy, s, s, 0, 0, SIDE, SIDE);
+  pip.getContext('2d').drawImage(grab, 0, 0, 128, 128);
+  return grab.toDataURL('image/jpeg', 0.6);
+}
+
+// ---------- 連線 ----------
+let falMod = null;
+async function getFal() {
+  if (falMod) return falMod;
+  // 官方 npm 客戶端；它負責 WebSocket（msgpack）、重連與 token 流程
+  falMod = (await import('https://cdn.jsdelivr.net/npm/@fal-ai/client@1.10.1/+esm')).fal;
+  return falMod;
+}
+async function fetchToken(appPath) {
+  const cfg = loadCfg();
+  if (!cfg.token) throw new Error('No access token yet. Tap ⚙ and paste it.');
+  const res = await fetch(cfg.url.replace(/\/+$/, '') + '/v1/rt-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.token },
+    body: JSON.stringify({ app: appPath }),
+  });
+  const text = await res.text(); let body = null; try { body = JSON.parse(text); } catch (e) {}
+  if (!res.ok) {
+    const slug = body && (body.error && (body.error.message || body.error));
+    if (res.status === 401) throw new Error('The access token was rejected. Check it in ⚙.');
+    if (slug === 'daily_quota_reached' || res.status === 429) throw new Error('Realtime token limit reached for now (' + (slug || res.status) + ').');
+    throw new Error('Token request failed (HTTP ' + res.status + '): ' + String(slug || text).slice(0, 200) + (body && body.detail ? ' · ' + String(body.detail).slice(0, 200) : ''));
+  }
+  S.tokenSeconds = body.duration || 120;
+  return body.token;
+}
+
+// ---------- 統計 ----------
+const S = { running: false, startedAt: 0, firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, stalls: 0, lastRecvAt: 0, maxGap: 0,
+            recvTimes: [], lats: [], lastLat: 0, inflight: [], tokenSeconds: 120, lastErr: '', nsfw: 0, lastKeys: '' };
+function resetStats() { Object.assign(S, { startedAt: performance.now(), firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, stalls: 0, lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: [], lastErr: '', nsfw: 0, lastKeys: '' }); }
+function pct(arr, p) { if (!arr.length) return 0; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * p))]; }
+function render() {
+  const now = performance.now();
+  S.recvTimes = S.recvTimes.filter(t => now - t < 5000);
+  const fps = S.recvTimes.length / Math.min(5, Math.max(1, (now - S.startedAt) / 1000));
+  const lats = S.lats.slice(-60);
+  const left = S.running ? Math.max(0, Math.round(S.tokenSeconds - (now - S.startedAt) / 1000)) : 0;
+  $('stats').textContent =
+    `frames sent ${S.sent} · received ${S.recv} · in flight ${S.inflight.length}\n` +
+    `fps (last 5 s) ${fps.toFixed(1)} · latency last ${Math.round(S.lastLat)} ms · median ${Math.round(pct(lats, .5))} ms · p95 ${Math.round(pct(lats, .95))} ms\n` +
+    `first frame ${S.firstAt ? Math.round(S.firstAt - S.startedAt) + ' ms after start' : '—'} · longest gap ${Math.round(S.maxGap)} ms · stalls (>${STALL_MS} ms) ${S.stalls}\n` +
+    `odd packets ${S.odd} · errors ${S.errors}${S.nsfw ? ' · safety-blocked ' + S.nsfw : ''}${S.running ? ' · session ends in ' + left + ' s' : ''}` +
+    (S.lastErr ? `\nlast error: ${S.lastErr}` : '') + (S.odd && S.lastKeys ? `\nodd packet keys: ${S.lastKeys}` : '');
+  const v = $('verdict');
+  if (!S.running) return;
+  if (!S.recv) { v.textContent = 'connecting…'; v.className = 'warn'; return; }
+  const recent = S.stalls === 0 || (now - S.lastRecvAt) < STALL_MS;
+  if (fps >= 4 && S.errors === 0 && recent) { v.textContent = 'stream steady'; v.className = 'ok'; }
+  else if (fps >= 1.5) { v.textContent = 'stream slow / uneven'; v.className = 'warn'; }
+  else { v.textContent = 'stream struggling'; v.className = 'bad'; }
+}
+setInterval(render, 250);
+
+// ---------- 主迴圈 ----------
+let conn = null, src = null, raf = 0, lastSendAt = 0, endTimer = 0;
+
+function onResult(result) {
+  const now = performance.now();
+  const sentAt = S.inflight.shift();                       // 結果依序回來，先進先出
+  if (sentAt != null) { S.lastLat = now - sentAt; S.lats.push(S.lastLat); }
+  const img = result && result.images && result.images[0];
+  const url = img && (img.url || (typeof img === 'string' ? img : ''));
+  if (!url) { S.odd++; S.lastKeys = result ? Object.keys(result).join(', ') : '(empty)'; return; }
+  if (result.has_nsfw_concepts && result.has_nsfw_concepts[0]) { S.nsfw++; return; }
+  if (S.lastRecvAt) { const gap = now - S.lastRecvAt; if (gap > S.maxGap) S.maxGap = gap; if (gap > STALL_MS) S.stalls++; }
+  else S.firstAt = now;
+  S.lastRecvAt = now; S.recv++; S.recvTimes.push(now);
+  out.src = url; stage.classList.add('live');
+}
+function onError(err) {
+  S.errors++; S.lastErr = String((err && (err.message || err.detail)) || err).slice(0, 220);
+  S.inflight.shift();                                       // 出錯的那張不會有結果
+}
+
+function pump() {
+  raf = requestAnimationFrame(pump);
+  if (!S.running || !conn) return;
+  const now = performance.now();
+  if (S.inflight.length >= MAX_INFLIGHT || now - lastSendAt < MIN_GAP_MS) return;
+  const frame = grabFrame(src); if (!frame) return;
+  lastSendAt = now; S.inflight.push(now); S.sent++;
+  try {
+    conn.send({
+      image_url: frame, prompt: PROMPT, negative_prompt: NEGATIVE,
+      strength: +$('strength').value, num_inference_steps: +$('steps').value, guidance_scale: 1.5,
+      ...($('fixSeed').checked ? { seed: SEED } : {}),
+      image_size: { width: SIDE, height: SIDE }, num_images: 1, sync_mode: true, format: 'jpeg',
+    });
+  } catch (e) { S.inflight.pop(); S.errors++; S.lastErr = String(e && e.message || e); }
+}
+
+function fakeConnection() {
+  // 模擬 fal：每張 120–220 ms 後把原圖還回來，偶爾 1.5 秒卡一下（驗證卡頓計數）
+  let n = 0;
+  return {
+    send(p) { n++; const d = (n % 40 === 0) ? 1500 : 120 + Math.random() * 100; setTimeout(() => { if (S.running) onResult({ images: [{ url: p.image_url }] }); }, d); },
+    close() {},
+  };
+}
+
+async function start() {
+  say(''); $('go').disabled = true;
+  try {
+    src = await openSource();
+    resetStats(); S.running = true;
+    if (FAKE) { conn = fakeConnection(); }
+    else {
+      const fal = await getFal();
+      conn = fal.realtime.connect(APP, { connectionKey: 'surreallens-v7', throttleInterval: 0, onResult, onError, tokenProvider: fetchToken });
+    }
+    $('go').textContent = 'Stop'; $('go').disabled = false;
+    stage.classList.remove('live');
+    lastSendAt = 0; cancelAnimationFrame(raf); raf = requestAnimationFrame(pump);
+    // token 到期就整段結束，避免空轉計費；要再看就重新按 Start
+    clearTimeout(endTimer); endTimer = setTimeout(() => { if (S.running) { stop(); say('The session ended (token time is up). Tap Start for another.'); } }, (S.tokenSeconds || 120) * 1000 - 3000);
+  } catch (e) {
+    S.running = false; closeSource(); $('go').textContent = 'Start'; $('go').disabled = false;
+    say(e && e.name === 'NotAllowedError' ? 'Camera permission was denied.' : String(e && e.message || e));
+  }
+}
+function stop() {
+  S.running = false; clearTimeout(endTimer); cancelAnimationFrame(raf);
+  try { conn && conn.close && conn.close(); } catch (e) {} conn = null;
+  closeSource(); stage.classList.remove('live');
+  $('go').textContent = 'Start'; $('go').disabled = false;
+  $('verdict').textContent = 'stopped'; $('verdict').className = 'warn';
+}
+$('go').onclick = () => (S.running ? stop() : start());
+window.addEventListener('pagehide', stop);
+if (FAKE) say('Fake mode: no fal call, a simulated stream to check the loop and the numbers.');
+</script>
+</body>
+</html>
