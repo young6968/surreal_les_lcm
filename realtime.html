@@ -244,7 +244,9 @@ async function start() {
     if (FAKE) { conn = fakeConnection(); }
     else {
       const fal = await getFal();
-      conn = fal.realtime.connect(APP, { connectionKey: 'surreallens-v7', throttleInterval: 0, onResult, onError, tokenProvider: fetchToken });
+      conn = fal.realtime.connect(APP, { connectionKey: 'surreallens-v7', throttleInterval: 0, onResult, onError,
+        // token 失敗時，函式庫自己不會告訴使用者；這裡把原因顯示在畫面上
+        tokenProvider: async app => { try { return await fetchToken(app); } catch (e) { S.errors++; S.lastErr = String(e && e.message || e); say(S.lastErr); throw e; } } });
     }
     $('go').textContent = 'Stop'; $('go').disabled = false;
     stage.classList.remove('live');
