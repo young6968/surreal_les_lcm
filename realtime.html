@@ -27,8 +27,8 @@ button:disabled { opacity:.45; }
 .row { max-width:640px; width:100%; margin:0 auto; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .row.sp { justify-content:space-between; }
 label { color:var(--dim); font-size:13px; display:flex; align-items:center; gap:8px; }
-input[type=range] { width:120px; }
-input[type=text], input[type=password], input[type=url] { width:100%; font:inherit; color:var(--fg); background:#141417; border:1px solid var(--line); border-radius:8px; padding:10px; }
+input[type=range] { width:140px; }
+input[type=url], input[type=password] { width:100%; font:inherit; color:var(--fg); background:#141417; border:1px solid var(--line); border-radius:8px; padding:10px; }
 pre { margin:0; font:12px/1.5 ui-monospace, Consolas, monospace; color:var(--dim); white-space:pre-wrap; }
 #msg { color:var(--warn); min-height:1.4em; font-size:13px; }
 #verdict.ok { color:var(--ok); } #verdict.warn { color:var(--warn); } #verdict.bad { color:var(--bad); }
@@ -61,28 +61,26 @@ pre { margin:0; font:12px/1.5 ui-monospace, Consolas, monospace; color:var(--dim
 </div>
 <div class="row">
   <label>Strength <input id="strength" type="range" min="0.3" max="1" step="0.05" value="0.7"> <span id="strengthV">0.70</span></label>
-  <label>Steps <input id="steps" type="range" min="2" max="8" step="1" value="4"> <span id="stepsV">4</span></label>
-  <label><input id="fixSeed" type="checkbox" checked> fixed seed</label>
 </div>
 <div class="row"><div id="msg"></div></div>
 <div class="row"><pre id="stats"></pre></div>
 
-<script type="module">
+<script>
 // ---------- 固定設定（先不用標籤提示詞，提示詞固定） ----------
+// fal 的圖生圖「即時串流（WebSocket）」端點實測沒有回應，所以改成：鏡頭一直開著，
+// 一張一張用一般 HTTP 送給 Worker（/v1/live），前一張回來就送下一張。約每秒 1–2 張，不是 100 毫秒。
 const PROMPT = 'a dreamlike scene where ordinary objects slowly turn into flowing sand and glass, strange quiet atmosphere, surreal photography, muted warm colors, cinematic, highly detailed';
-const NEGATIVE = 'text, watermark, organs, flesh, vines, tendrils, roots, plants';
-const APP = 'fal-ai/fast-lcm-diffusion/image-to-image';
-const SIDE = 512;            // 官方說 512 最快
-const MAX_INFLIGHT = 1;      // 一次一張：函式庫只保留「最新一則」待送訊息，多張同時在路上會對不上號
-const LOST_MS = 3000;        // 一張送出超過這麼久還沒回，當作掉了，繼續送下一張
-const HINT_MS = 20000;       // 這麼久都沒收到任何結果，畫面上提示去哪裡看原因
-const MIN_GAP_MS = 60;       // 兩次送出最短間隔
-const STALL_MS = 1000;       // 兩張結果之間超過這麼久，算一次卡頓
-const SEED = 42;
+const SIDE = 512;
+const MAX_INFLIGHT = 2;       // 同時在路上的張數；2 張可以把等待時間疊起來
+const MIN_GAP_MS = 80;        // 兩次送出最短間隔
+const REQUEST_TIMEOUT_MS = 20000;
+const SESSION_SECONDS = 120;  // 一次最多跑這麼久，避免忘記關掉一直扣費
+const STALL_MS = 3000;        // 兩張結果之間超過這麼久，算一次卡頓
+const ERROR_BACKOFF_MS = 1500;
 const DEFAULT_WORKER_URL = 'https://surreallens-lcm-proxy.surreallens-amily.workers.dev';
 const CFG_URL_KEY = 'surreallens_v7_fal_url';
 const CFG_TOKEN_KEY = 'surreallens_v7_fal_token';
-const FAKE = new URLSearchParams(location.search).has('fake');   // 不連 fal，用假的串流驗證流程與統計
+const FAKE = new URLSearchParams(location.search).has('fake');   // 不連 Worker，用假的回應驗證流程與統計
 
 const $ = id => document.getElementById(id);
 const stage = $('stage'), cam = $('cam'), out = $('out'), fakeCv = $('fakeCv'), pip = $('pip');
@@ -101,8 +99,6 @@ $('cfgSave').onclick = () => {
   $('cfg').classList.remove('on'); say('Saved.');
 };
 $('strength').oninput = e => $('strengthV').textContent = (+e.target.value).toFixed(2);
-$('steps').oninput = e => $('stepsV').textContent = e.target.value;
-
 function say(t) { $('msg').textContent = t || ''; }
 
 // ---------- 畫面來源：鏡頭，或假模式的合成畫面 ----------
@@ -134,160 +130,126 @@ function grabFrame(src) {
   const s = Math.min(sw, sh), sx = (sw - s) / 2, sy = (sh - s) / 2;     // 置中裁成正方形
   gctx.drawImage(src, sx, sy, s, s, 0, 0, SIDE, SIDE);
   pip.getContext('2d').drawImage(grab, 0, 0, 128, 128);
-  return grab.toDataURL('image/jpeg', 0.6);
+  return grab.toDataURL('image/jpeg', 0.7);
 }
 
-// ---------- 連線 ----------
-let falMod = null;
-async function getFal() {
-  if (falMod) return falMod;
-  // 官方 npm 客戶端；它負責 WebSocket（msgpack）、重連與 token 流程
-  falMod = (await import('https://cdn.jsdelivr.net/npm/@fal-ai/client@1.10.1/+esm')).fal;
-  return falMod;
-}
-async function fetchToken(appPath) {
-  const cfg = loadCfg();
-  if (!cfg.token) throw new Error('No access token yet. Tap ⚙ and paste it.');
-  const res = await fetch(cfg.url.replace(/\/+$/, '') + '/v1/rt-token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.token },
-    body: JSON.stringify({ app: appPath }),
-  });
-  const text = await res.text(); let body = null; try { body = JSON.parse(text); } catch (e) {}
-  if (!res.ok) {
-    const slug = body && (body.error && (body.error.message || body.error));
-    if (res.status === 401) throw new Error('The access token was rejected. Check it in ⚙.');
-    if (slug === 'daily_quota_reached' || res.status === 429) throw new Error('Realtime token limit reached for now (' + (slug || res.status) + ').');
-    throw new Error('Token request failed (HTTP ' + res.status + '): ' + String(slug || text).slice(0, 200) + (body && body.detail ? ' · ' + String(body.detail).slice(0, 200) : ''));
+// ---------- 送一張給 Worker ----------
+class FatalError extends Error {}
+async function liveFrame(frame) {
+  if (FAKE) {
+    await new Promise(r => setTimeout(r, 450 + Math.random() * 300));
+    return { image: frame };
   }
-  S.tokenSeconds = body.duration || 120;
-  return body.token;
+  const cfg = loadCfg();
+  if (!cfg.token) throw new FatalError('No access token yet. Tap ⚙ and paste it.');
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(cfg.url.replace(/\/+$/, '') + '/v1/live', {
+      method: 'POST', signal: ctl.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.token },
+      body: JSON.stringify({ image: frame, prompt: PROMPT, width: SIDE, height: SIDE, strength: +$('strength').value }),
+    });
+    const text = await res.text(); let body = null; try { body = JSON.parse(text); } catch (e) {}
+    if (res.status === 401) throw new FatalError('The access token was rejected. Check it in ⚙.');
+    if (res.status === 429) throw new FatalError(body && body.error === 'daily_quota_reached' ? 'Today’s live-frame quota is used up.' : 'Too many frames per minute. Wait a bit and start again.');
+    if (!res.ok) throw new Error('HTTP ' + res.status + ': ' + String((body && (body.detail || body.error)) || text).slice(0, 200));
+    return body;
+  } catch (e) {
+    if (e instanceof FatalError) throw e;
+    if (e && e.name === 'AbortError') throw new Error('timed out after ' + REQUEST_TIMEOUT_MS / 1000 + ' s');
+    if (e instanceof TypeError) throw new Error('could not reach the Worker (is this page’s address in ALLOWED_ORIGINS?)');
+    throw e;
+  } finally { clearTimeout(timer); }
 }
 
 // ---------- 統計 ----------
-const S = { running: false, startedAt: 0, firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, lost: 0, level: 0, stalls: 0, lastRecvAt: 0, maxGap: 0,
-            recvTimes: [], lats: [], lastLat: 0, inflight: [], tokenSeconds: 120, lastErr: '', nsfw: 0, lastKeys: '' };
-function resetStats() { Object.assign(S, { startedAt: performance.now(), firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, lost: 0, level: 0, stalls: 0, lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: [], lastErr: '', nsfw: 0, lastKeys: '' }); }
+const S = { running: false, startedAt: 0, firstAt: 0, sent: 0, recv: 0, errors: 0, timeouts: 0, stalls: 0, nsfw: 0,
+            lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: 0, lastErr: '', shownSeq: 0 };
+function resetStats() { Object.assign(S, { startedAt: performance.now(), firstAt: 0, sent: 0, recv: 0, errors: 0, timeouts: 0, stalls: 0, nsfw: 0,
+  lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: 0, lastErr: '', shownSeq: 0 }); }
 function pct(arr, p) { if (!arr.length) return 0; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * p))]; }
 function render() {
   const now = performance.now();
-  S.recvTimes = S.recvTimes.filter(t => now - t < 5000);
-  const fps = S.recvTimes.length / Math.min(5, Math.max(1, (now - S.startedAt) / 1000));
-  const lats = S.lats.slice(-60);
-  const left = S.running ? Math.max(0, Math.round(S.tokenSeconds - (now - S.startedAt) / 1000)) : 0;
+  S.recvTimes = S.recvTimes.filter(t => now - t < 10000);
+  const fps = S.recvTimes.length / Math.min(10, Math.max(1, (now - S.startedAt) / 1000));
+  const lats = S.lats.slice(-40);
+  const left = S.running ? Math.max(0, Math.round(SESSION_SECONDS - (now - S.startedAt) / 1000)) : 0;
   $('stats').textContent =
-    `frames sent ${S.sent} · received ${S.recv} · in flight ${S.inflight.length}\n` +
-    `fps (last 5 s) ${fps.toFixed(1)} · latency last ${Math.round(S.lastLat)} ms · median ${Math.round(pct(lats, .5))} ms · p95 ${Math.round(pct(lats, .95))} ms\n` +
+    `frames sent ${S.sent} · received ${S.recv} · in flight ${S.inflight}\n` +
+    `fps (last 10 s) ${fps.toFixed(1)} · per-frame time last ${Math.round(S.lastLat)} ms · median ${Math.round(pct(lats, .5))} ms · p95 ${Math.round(pct(lats, .95))} ms\n` +
     `first frame ${S.firstAt ? Math.round(S.firstAt - S.startedAt) + ' ms after start' : '—'} · longest gap ${Math.round(S.maxGap)} ms · stalls (>${STALL_MS} ms) ${S.stalls}\n` +
-    `odd packets ${S.odd} · errors ${S.errors} · lost ${S.lost} · payload level ${S.level}/3${S.nsfw ? ' · safety-blocked ' + S.nsfw : ''}${S.running ? ' · session ends in ' + left + ' s' : ''}` +
-    (S.lastErr ? `\nlast error: ${S.lastErr}` : '') + (S.odd && S.lastKeys ? `\nodd packet keys: ${S.lastKeys}` : '');
+    `errors ${S.errors} · timeouts ${S.timeouts}${S.nsfw ? ' · safety-blocked ' + S.nsfw : ''}${S.running ? ' · session ends in ' + left + ' s' : ''}` +
+    (S.lastErr ? `\nlast error: ${S.lastErr}` : '');
   const v = $('verdict');
   if (!S.running) return;
-  if (!S.recv) {
-    const waited = now - S.startedAt;
-    v.textContent = 'connecting… ' + Math.round(waited / 1000) + ' s'; v.className = 'warn';
-    if (waited > HINT_MS && !S.lastErr) say('No result yet after ' + Math.round(HINT_MS / 1000) + ' s. Open DevTools (F12) → Network → WS to see whether the socket opened.');
-    return;
-  }
-  const recent = S.stalls === 0 || (now - S.lastRecvAt) < STALL_MS;
-  if (fps >= 4 && S.errors === 0 && recent) { v.textContent = 'stream steady'; v.className = 'ok'; }
-  else if (fps >= 1.5) { v.textContent = 'stream slow / uneven'; v.className = 'warn'; }
-  else { v.textContent = 'stream struggling'; v.className = 'bad'; }
+  if (!S.recv) { v.textContent = 'waiting for the first frame… ' + Math.round((now - S.startedAt) / 1000) + ' s'; v.className = 'warn'; return; }
+  const recent = (now - S.lastRecvAt) < STALL_MS;
+  if (fps >= 1.2 && S.errors === 0 && recent) { v.textContent = 'loop steady'; v.className = 'ok'; }
+  else if (fps >= 0.5 && recent) { v.textContent = 'loop slow / uneven'; v.className = 'warn'; }
+  else { v.textContent = 'loop struggling'; v.className = 'bad'; }
 }
 setInterval(render, 250);
 
 // ---------- 主迴圈 ----------
-let conn = null, src = null, raf = 0, lastSendAt = 0, endTimer = 0;
+let src = null, raf = 0, lastSendAt = 0, endTimer = 0, seq = 0, holdUntil = 0, runId = 0;
 
-function onResult(result) {
-  const now = performance.now();
-  const sentAt = S.inflight.shift();                       // 結果依序回來，先進先出
-  if (sentAt != null) { S.lastLat = now - sentAt; S.lats.push(S.lastLat); }
-  const img = result && result.images && result.images[0];
-  const url = img && (img.url || (typeof img === 'string' ? img : ''));
-  if (!url) { S.odd++; S.lastKeys = result ? Object.keys(result).join(', ') : '(empty)'; return; }
-  if (result.has_nsfw_concepts && result.has_nsfw_concepts[0]) { S.nsfw++; return; }
-  if (S.lastRecvAt) { const gap = now - S.lastRecvAt; if (gap > S.maxGap) S.maxGap = gap; if (gap > STALL_MS) S.stalls++; }
-  else S.firstAt = now;
-  S.lastRecvAt = now; S.recv++; S.recvTimes.push(now);
-  out.src = url; stage.classList.add('live');
-}
-function onError(err) {
-  S.errors++;
-  let body = ''; try { body = err && err.body ? ' ' + JSON.stringify(err.body) : ''; } catch (e) {}
-  S.lastErr = (String((err && (err.message || err.detail)) || err) + body).slice(0, 300);
-  S.inflight.shift();                                       // 出錯的那張不會有結果
-  if (!S.recv && S.level < 3) S.level++;                    // 還沒成功過：下一張改送更精簡的欄位
-}
-
-// fal 的即時端點對欄位的容忍度沒寫在文件裡。出現 INTERNAL_ERROR 時，從完整欄位逐級縮減，
-// 縮到文件範例的最小組合（image_url + prompt + sync_mode）為止；第一張成功之後就不再縮。
-function buildPayload(frame) {
-  const strength = +$('strength').value, steps = +$('steps').value;
-  const seed = $('fixSeed').checked ? { seed: SEED } : {};
-  switch (S.level) {
-    case 0: return { image_url: frame, prompt: PROMPT, negative_prompt: NEGATIVE, strength, num_inference_steps: steps, guidance_scale: 1.5, ...seed,
-                     image_size: { width: SIDE, height: SIDE }, num_images: 1, sync_mode: true, format: 'jpeg' };
-    case 1: return { image_url: frame, prompt: PROMPT, negative_prompt: NEGATIVE, strength, num_inference_steps: steps, guidance_scale: 1.5, ...seed, sync_mode: true };
-    case 2: return { image_url: frame, prompt: PROMPT, strength, sync_mode: true };
-    default: return { image_url: frame, prompt: PROMPT, sync_mode: true };
-  }
+async function sendOne(frame, myRun) {
+  const mySeq = ++seq, t0 = performance.now();
+  S.sent++; S.inflight++;
+  try {
+    const r = await liveFrame(frame);
+    if (myRun !== runId || !S.running) return;
+    const now = performance.now();
+    S.lastLat = now - t0; S.lats.push(S.lastLat);
+    if (r && r.nsfw) { S.nsfw++; return; }
+    if (!r || !r.image) { S.errors++; S.lastErr = 'the Worker answered without an image'; return; }
+    if (S.lastRecvAt) { const gap = now - S.lastRecvAt; if (gap > S.maxGap) S.maxGap = gap; if (gap > STALL_MS) S.stalls++; }
+    else S.firstAt = now;
+    S.lastRecvAt = now; S.recv++; S.recvTimes.push(now);
+    if (mySeq > S.shownSeq) { S.shownSeq = mySeq; out.src = r.image; stage.classList.add('live'); }   // 晚到的舊張不蓋過新的
+  } catch (e) {
+    if (myRun !== runId || !S.running) return;
+    if (e instanceof FatalError) { say(e.message); stop(); return; }
+    S.errors++; S.lastErr = String(e && e.message || e).slice(0, 240);
+    if (/timed out/.test(S.lastErr)) S.timeouts++;
+    holdUntil = performance.now() + ERROR_BACKOFF_MS;       // 出錯就先停一下，不要連環狂送
+  } finally { if (myRun === runId) S.inflight = Math.max(0, S.inflight - 1); }
 }
 
 function pump() {
   raf = requestAnimationFrame(pump);
-  if (!S.running || !conn) return;
+  if (!S.running) return;
   const now = performance.now();
-  if (S.inflight.length && S.recv && now - S.inflight[0] > LOST_MS) { S.inflight.shift(); S.lost++; }   // 第一張回來之前不判掉（可能是冷啟動）
-  if (S.inflight.length >= MAX_INFLIGHT || now - lastSendAt < MIN_GAP_MS) return;
+  if (S.inflight >= MAX_INFLIGHT || now - lastSendAt < MIN_GAP_MS || now < holdUntil) return;
   const frame = grabFrame(src); if (!frame) return;
-  lastSendAt = now; S.inflight.push(now); S.sent++;
-  try {
-    conn.send(buildPayload(frame));
-  } catch (e) { S.inflight.pop(); S.errors++; S.lastErr = String(e && e.message || e); }
-}
-
-function fakeConnection() {
-  // 模擬 fal：每張 120–220 ms 後把原圖還回來，偶爾 1.5 秒卡一下（驗證卡頓計數）
-  let n = 0;
-  return {
-    send(p) { n++; const d = (n % 40 === 0) ? 1500 : 120 + Math.random() * 100; setTimeout(() => { if (S.running) onResult({ images: [{ url: p.image_url }] }); }, d); },
-    close() {},
-  };
+  lastSendAt = now;
+  sendOne(frame, runId);
 }
 
 async function start() {
   say(''); $('go').disabled = true;
   try {
     src = await openSource();
-    resetStats(); S.running = true;
-    if (FAKE) { conn = fakeConnection(); }
-    else {
-      const fal = await getFal();
-      conn = fal.realtime.connect(APP, { connectionKey: 'surreallens-v7-' + Date.now(), throttleInterval: 0, onResult, onError,
-        // token 失敗時，函式庫自己不會告訴使用者；這裡把原因顯示在畫面上
-        tokenProvider: async app => { try { return await fetchToken(app); } catch (e) { S.errors++; S.lastErr = String(e && e.message || e); say(S.lastErr); throw e; } } });
-    }
+    runId++; resetStats(); S.running = true; holdUntil = 0; lastSendAt = 0;
     $('go').textContent = 'Stop'; $('go').disabled = false;
     stage.classList.remove('live');
-    lastSendAt = 0; cancelAnimationFrame(raf); raf = requestAnimationFrame(pump);
-    // token 到期就整段結束，避免空轉計費；要再看就重新按 Start
-    clearTimeout(endTimer); endTimer = setTimeout(() => { if (S.running) { stop(); say('The session ended (token time is up). Tap Start for another.'); } }, (S.tokenSeconds || 120) * 1000 - 3000);
+    cancelAnimationFrame(raf); raf = requestAnimationFrame(pump);
+    // 時間到就整段結束，避免空轉計費；要再看就重新按 Start
+    clearTimeout(endTimer); endTimer = setTimeout(() => { if (S.running) { stop(); say('The session ended (time limit). Tap Start for another.'); } }, SESSION_SECONDS * 1000);
   } catch (e) {
     S.running = false; closeSource(); $('go').textContent = 'Start'; $('go').disabled = false;
     say(e && e.name === 'NotAllowedError' ? 'Camera permission was denied.' : String(e && e.message || e));
   }
 }
 function stop() {
-  S.running = false; clearTimeout(endTimer); cancelAnimationFrame(raf);
-  try { conn && conn.close && conn.close(); } catch (e) {} conn = null;
+  S.running = false; runId++; clearTimeout(endTimer); cancelAnimationFrame(raf);
   closeSource(); stage.classList.remove('live');
   $('go').textContent = 'Start'; $('go').disabled = false;
   $('verdict').textContent = 'stopped'; $('verdict').className = 'warn';
 }
 $('go').onclick = () => (S.running ? stop() : start());
 window.addEventListener('pagehide', stop);
-if (FAKE) say('Fake mode: no fal call, a simulated stream to check the loop and the numbers.');
+if (FAKE) say('Fake mode: no Worker call, a simulated reply to check the loop and the numbers.');
 </script>
 </body>
 </html>
