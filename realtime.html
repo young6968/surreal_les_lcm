@@ -73,7 +73,9 @@ const PROMPT = 'a dreamlike scene where ordinary objects slowly turn into flowin
 const NEGATIVE = 'text, watermark, organs, flesh, vines, tendrils, roots, plants';
 const APP = 'fal-ai/fast-lcm-diffusion/image-to-image';
 const SIDE = 512;            // 官方說 512 最快
-const MAX_INFLIGHT = 2;      // 同時最多幾張在路上（再多只會堆積延遲）
+const MAX_INFLIGHT = 1;      // 一次一張：函式庫只保留「最新一則」待送訊息，多張同時在路上會對不上號
+const LOST_MS = 3000;        // 一張送出超過這麼久還沒回，當作掉了，繼續送下一張
+const HINT_MS = 20000;       // 這麼久都沒收到任何結果，畫面上提示去哪裡看原因
 const MIN_GAP_MS = 60;       // 兩次送出最短間隔
 const STALL_MS = 1000;       // 兩張結果之間超過這麼久，算一次卡頓
 const SEED = 42;
@@ -163,9 +165,9 @@ async function fetchToken(appPath) {
 }
 
 // ---------- 統計 ----------
-const S = { running: false, startedAt: 0, firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, stalls: 0, lastRecvAt: 0, maxGap: 0,
+const S = { running: false, startedAt: 0, firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, lost: 0, stalls: 0, lastRecvAt: 0, maxGap: 0,
             recvTimes: [], lats: [], lastLat: 0, inflight: [], tokenSeconds: 120, lastErr: '', nsfw: 0, lastKeys: '' };
-function resetStats() { Object.assign(S, { startedAt: performance.now(), firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, stalls: 0, lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: [], lastErr: '', nsfw: 0, lastKeys: '' }); }
+function resetStats() { Object.assign(S, { startedAt: performance.now(), firstAt: 0, sent: 0, recv: 0, odd: 0, errors: 0, lost: 0, stalls: 0, lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: [], lastErr: '', nsfw: 0, lastKeys: '' }); }
 function pct(arr, p) { if (!arr.length) return 0; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * p))]; }
 function render() {
   const now = performance.now();
@@ -177,11 +179,16 @@ function render() {
     `frames sent ${S.sent} · received ${S.recv} · in flight ${S.inflight.length}\n` +
     `fps (last 5 s) ${fps.toFixed(1)} · latency last ${Math.round(S.lastLat)} ms · median ${Math.round(pct(lats, .5))} ms · p95 ${Math.round(pct(lats, .95))} ms\n` +
     `first frame ${S.firstAt ? Math.round(S.firstAt - S.startedAt) + ' ms after start' : '—'} · longest gap ${Math.round(S.maxGap)} ms · stalls (>${STALL_MS} ms) ${S.stalls}\n` +
-    `odd packets ${S.odd} · errors ${S.errors}${S.nsfw ? ' · safety-blocked ' + S.nsfw : ''}${S.running ? ' · session ends in ' + left + ' s' : ''}` +
+    `odd packets ${S.odd} · errors ${S.errors} · lost ${S.lost}${S.nsfw ? ' · safety-blocked ' + S.nsfw : ''}${S.running ? ' · session ends in ' + left + ' s' : ''}` +
     (S.lastErr ? `\nlast error: ${S.lastErr}` : '') + (S.odd && S.lastKeys ? `\nodd packet keys: ${S.lastKeys}` : '');
   const v = $('verdict');
   if (!S.running) return;
-  if (!S.recv) { v.textContent = 'connecting…'; v.className = 'warn'; return; }
+  if (!S.recv) {
+    const waited = now - S.startedAt;
+    v.textContent = 'connecting… ' + Math.round(waited / 1000) + ' s'; v.className = 'warn';
+    if (waited > HINT_MS && !S.lastErr) say('No result yet after ' + Math.round(HINT_MS / 1000) + ' s. Open DevTools (F12) → Network → WS to see whether the socket opened.');
+    return;
+  }
   const recent = S.stalls === 0 || (now - S.lastRecvAt) < STALL_MS;
   if (fps >= 4 && S.errors === 0 && recent) { v.textContent = 'stream steady'; v.className = 'ok'; }
   else if (fps >= 1.5) { v.textContent = 'stream slow / uneven'; v.className = 'warn'; }
@@ -214,6 +221,7 @@ function pump() {
   raf = requestAnimationFrame(pump);
   if (!S.running || !conn) return;
   const now = performance.now();
+  if (S.inflight.length && S.recv && now - S.inflight[0] > LOST_MS) { S.inflight.shift(); S.lost++; }   // 第一張回來之前不判掉（可能是冷啟動）
   if (S.inflight.length >= MAX_INFLIGHT || now - lastSendAt < MIN_GAP_MS) return;
   const frame = grabFrame(src); if (!frame) return;
   lastSendAt = now; S.inflight.push(now); S.sent++;
@@ -244,7 +252,7 @@ async function start() {
     if (FAKE) { conn = fakeConnection(); }
     else {
       const fal = await getFal();
-      conn = fal.realtime.connect(APP, { connectionKey: 'surreallens-v7', throttleInterval: 0, onResult, onError,
+      conn = fal.realtime.connect(APP, { connectionKey: 'surreallens-v7-' + Date.now(), throttleInterval: 0, onResult, onError,
         // token 失敗時，函式庫自己不會告訴使用者；這裡把原因顯示在畫面上
         tokenProvider: async app => { try { return await fetchToken(app); } catch (e) { S.errors++; S.lastErr = String(e && e.message || e); say(S.lastErr); throw e; } } });
     }
