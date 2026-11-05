@@ -249,7 +249,7 @@ button:disabled { opacity: .45; cursor: default; }
   <video id="video" playsinline muted autoplay></video>
   <img id="still" alt="">
   <canvas id="surreal"></canvas>
-  <img id="result" alt="Heterotopia version of this view">
+  <img id="result" alt="Reading version of this view">
   <canvas id="glow"></canvas>
   <canvas id="boxes"></canvas>
 
@@ -275,7 +275,7 @@ button:disabled { opacity: .45; cursor: default; }
     <div class="panel-head">
       <div class="seg">
         <button id="modeReal" class="on">Reality</button>
-        <button id="modeSurreal">Heterotopia</button>
+        <button id="modeSurreal">Reading</button>
       </div>
       <div id="summary" class="summary"></div>
     </div>
@@ -299,7 +299,7 @@ button:disabled { opacity: .45; cursor: default; }
       <button id="saveBtn" class="save">Save</button>
     </div>
     <div id="healthMsg"></div>
-    <p>Heterotopia paints your live view through your SurrealLens fal Worker: while it is open, one frame after another is sent (about one picture every few seconds, for up to two minutes at a time). The live bars are read on your device by a small AI model. Nothing is uploaded until you tap Heterotopia. Settings stay on this device.</p>
+    <p>Reading paints your live view through your SurrealLens fal Worker: while it is open, one frame after another is sent (about one picture every few seconds, for up to two minutes at a time). The live bars are read on your device by a small AI model. Nothing is uploaded until you tap Reading. Settings stay on this device.</p>
   </div>
 </section>
 
@@ -1630,7 +1630,7 @@ async function tapHeterotopia() {
   if (!sw) return;
   // 濃度要由手機上的 CLIP 量，沒準備好就不畫（不拿猜的數字來代替）
   if (clip.state() === 'loading') { showCaption('<div class="q">The lens is still waking up.</div><small>Try again in a moment.</small>', 4000); return; }
-  if (clip.state() === 'failed') { showCaption('<div class="q err">The reading AI could not start on this device.</div><small>Heterotopia needs it to measure the view, so nothing was sent.</small>', 7000); return; }
+  if (clip.state() === 'failed') { showCaption('<div class="q err">The reading AI could not start on this device.</div><small>Reading needs it to measure the view, so nothing was sent.</small>', 7000); return; }
 
   busy = true; mode = 'busy';
   setButtons();
@@ -1766,7 +1766,7 @@ async function liveSend(frame, myRun) {
     }
   } catch (e) {
     if (myRun !== live.run || !live.on) return;
-    if (e instanceof LiveFatal) { liveEnd(`<div class="q err">Heterotopia stopped.</div><small>${escapeHtml(e.message)}</small>`); return; }
+    if (e instanceof LiveFatal) { liveEnd(`<div class="q err">Reading stopped.</div><small>${escapeHtml(e.message)}</small>`); return; }
     if (live.single) { liveEnd(`<div class="q err">Couldn’t open the heterotopia.</div><small>${escapeHtml(String(e && e.message || e))}</small>`); return; }   // 單張：不重試
     live.errors++; live.lastErr = String(e && e.message || e).slice(0, 240);
     if (++live.streak >= LIVE_MAX_ERR_STREAK) { liveEnd(`<div class="q err">Couldn’t keep the heterotopia going.</div><small>${escapeHtml(live.lastErr)}</small>`); return; }
@@ -1797,7 +1797,7 @@ function liveFirstFrame() {
   clearTimeout(live.timer);
   if (live.single) return;                                     // 單張不需要計時
   live.endsAt = performance.now() + LIVE_SESSION_S * 1000;
-  live.timer = setTimeout(() => liveEnd('<div class="q">The heterotopia closed.</div><small>It stays open for two minutes at a time. Tap Heterotopia to open it again.</small>'), LIVE_SESSION_S * 1000);
+  live.timer = setTimeout(() => liveEnd('<div class="q">The reading closed.</div><small>It stays open for two minutes at a time. Tap Reading to open it again.</small>'), LIVE_SESSION_S * 1000);
 }
 
 function liveTick() {
