@@ -74,7 +74,10 @@ const SIDE = 512;
 const MAX_INFLIGHT = 2;       // 同時在路上的張數；2 張可以把等待時間疊起來
 const MIN_GAP_MS = 80;        // 兩次送出最短間隔
 const REQUEST_TIMEOUT_MS = 20000;
-const SESSION_SECONDS = 120;  // 一次最多跑這麼久，避免忘記關掉一直扣費
+// fal 這個圖生圖模型閒置後的第一張很慢（冷啟動，實測 20 秒不夠）：暖機期間一次只送一張，等久一點
+const WARMUP_TIMEOUT_MS = 100000;
+const WARMUP_MAX_S = 110;     // 暖機最多等這麼久，等不到就整段結束
+const SESSION_SECONDS = 120;  // 第一張回來之後，一次最多跑這麼久，避免忘記關掉一直扣費
 const STALL_MS = 3000;        // 兩張結果之間超過這麼久，算一次卡頓
 const ERROR_BACKOFF_MS = 1500;
 const DEFAULT_WORKER_URL = 'https://surreallens-lcm-proxy.surreallens-amily.workers.dev';
@@ -142,7 +145,8 @@ async function liveFrame(frame) {
   }
   const cfg = loadCfg();
   if (!cfg.token) throw new FatalError('No access token yet. Tap ⚙ and paste it.');
-  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+  const limit = S.recv ? REQUEST_TIMEOUT_MS : WARMUP_TIMEOUT_MS;
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), limit);
   try {
     const res = await fetch(cfg.url.replace(/\/+$/, '') + '/v1/live', {
       method: 'POST', signal: ctl.signal,
@@ -151,12 +155,19 @@ async function liveFrame(frame) {
     });
     const text = await res.text(); let body = null; try { body = JSON.parse(text); } catch (e) {}
     if (res.status === 401) throw new FatalError('The access token was rejected. Check it in ⚙.');
-    if (res.status === 429) throw new FatalError(body && body.error === 'daily_quota_reached' ? 'Today’s live-frame quota is used up.' : 'Too many frames per minute. Wait a bit and start again.');
-    if (!res.ok) throw new Error('HTTP ' + res.status + ': ' + String((body && (body.detail || body.error)) || text).slice(0, 200));
+    if (res.status === 429) {
+      // Worker 自己的上限（每分鐘 / 每天）才算致命；fal 回的 429（忙碌、同時請求太多）只是稍等再試
+      if (body && body.error === 'daily_quota_reached') throw new FatalError('Today’s live-frame quota is used up.');
+      if (body && body.error === 'rate_limited') throw new FatalError('The Worker’s per-minute limit was hit (' + (body.scope || '') + '). Wait a bit and start again.');
+      const err = new Error('fal is busy (HTTP 429): ' + String((body && (body.detail || body.error)) || text).slice(0, 160));
+      err.backoff = 6000;
+      throw err;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status + (body && body.upstreamStatus ? ' (fal ' + body.upstreamStatus + ')' : '') + ': ' + String((body && (body.detail || body.error)) || text).slice(0, 200));
     return body;
   } catch (e) {
     if (e instanceof FatalError) throw e;
-    if (e && e.name === 'AbortError') throw new Error('timed out after ' + REQUEST_TIMEOUT_MS / 1000 + ' s');
+    if (e && e.name === 'AbortError') throw new Error('timed out after ' + limit / 1000 + ' s');
     if (e instanceof TypeError) throw new Error('could not reach the Worker (is this page’s address in ALLOWED_ORIGINS?)');
     throw e;
   } finally { clearTimeout(timer); }
@@ -164,7 +175,7 @@ async function liveFrame(frame) {
 
 // ---------- 統計 ----------
 const S = { running: false, startedAt: 0, firstAt: 0, sent: 0, recv: 0, errors: 0, timeouts: 0, stalls: 0, nsfw: 0,
-            lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: 0, lastErr: '', shownSeq: 0 };
+            lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: 0, lastErr: '', shownSeq: 0, endsAt: 0 };
 function resetStats() { Object.assign(S, { startedAt: performance.now(), firstAt: 0, sent: 0, recv: 0, errors: 0, timeouts: 0, stalls: 0, nsfw: 0,
   lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: 0, lastErr: '', shownSeq: 0 }); }
 function pct(arr, p) { if (!arr.length) return 0; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * p))]; }
@@ -173,7 +184,7 @@ function render() {
   S.recvTimes = S.recvTimes.filter(t => now - t < 10000);
   const fps = S.recvTimes.length / Math.min(10, Math.max(1, (now - S.startedAt) / 1000));
   const lats = S.lats.slice(-40);
-  const left = S.running ? Math.max(0, Math.round(SESSION_SECONDS - (now - S.startedAt) / 1000)) : 0;
+  const left = S.running ? Math.max(0, Math.round((S.endsAt - now) / 1000)) : 0;
   $('stats').textContent =
     `frames sent ${S.sent} · received ${S.recv} · in flight ${S.inflight}\n` +
     `fps (last 10 s) ${fps.toFixed(1)} · per-frame time last ${Math.round(S.lastLat)} ms · median ${Math.round(pct(lats, .5))} ms · p95 ${Math.round(pct(lats, .95))} ms\n` +
@@ -182,10 +193,11 @@ function render() {
     (S.lastErr ? `\nlast error: ${S.lastErr}` : '');
   const v = $('verdict');
   if (!S.running) return;
-  if (!S.recv) { v.textContent = 'waiting for the first frame… ' + Math.round((now - S.startedAt) / 1000) + ' s'; v.className = 'warn'; return; }
+  if (!S.recv) { v.textContent = 'warming up… ' + Math.round((now - S.startedAt) / 1000) + ' s (first frame can be slow)'; v.className = 'warn'; return; }
   const recent = (now - S.lastRecvAt) < STALL_MS;
-  if (fps >= 1.2 && S.errors === 0 && recent) { v.textContent = 'loop steady'; v.className = 'ok'; }
-  else if (fps >= 0.5 && recent) { v.textContent = 'loop slow / uneven'; v.className = 'warn'; }
+  // 實測每張約 3 秒、同時 2 張在路上，約每秒 0.5–0.7 張，所以門檻放在這個量級
+  if (fps >= 0.4 && S.errors === 0 && recent) { v.textContent = 'loop steady'; v.className = 'ok'; }
+  else if (fps >= 0.15 && recent) { v.textContent = 'loop slow / uneven'; v.className = 'warn'; }
   else { v.textContent = 'loop struggling'; v.className = 'bad'; }
 }
 setInterval(render, 250);
@@ -204,7 +216,7 @@ async function sendOne(frame, myRun) {
     if (r && r.nsfw) { S.nsfw++; return; }
     if (!r || !r.image) { S.errors++; S.lastErr = 'the Worker answered without an image'; return; }
     if (S.lastRecvAt) { const gap = now - S.lastRecvAt; if (gap > S.maxGap) S.maxGap = gap; if (gap > STALL_MS) S.stalls++; }
-    else S.firstAt = now;
+    else { S.firstAt = now; startSessionClock(); }
     S.lastRecvAt = now; S.recv++; S.recvTimes.push(now);
     if (mySeq > S.shownSeq) { S.shownSeq = mySeq; out.src = r.image; stage.classList.add('live'); }   // 晚到的舊張不蓋過新的
   } catch (e) {
@@ -212,7 +224,7 @@ async function sendOne(frame, myRun) {
     if (e instanceof FatalError) { say(e.message); stop(); return; }
     S.errors++; S.lastErr = String(e && e.message || e).slice(0, 240);
     if (/timed out/.test(S.lastErr)) S.timeouts++;
-    holdUntil = performance.now() + ERROR_BACKOFF_MS;       // 出錯就先停一下，不要連環狂送
+    holdUntil = performance.now() + (e && e.backoff || ERROR_BACKOFF_MS);   // 出錯就先停一下，不要連環狂送
   } finally { if (myRun === runId) S.inflight = Math.max(0, S.inflight - 1); }
 }
 
@@ -220,10 +232,15 @@ function pump() {
   raf = requestAnimationFrame(pump);
   if (!S.running) return;
   const now = performance.now();
-  if (S.inflight >= MAX_INFLIGHT || now - lastSendAt < MIN_GAP_MS || now < holdUntil) return;
+  if (S.inflight >= (S.recv ? MAX_INFLIGHT : 1) || now - lastSendAt < MIN_GAP_MS || now < holdUntil) return;
   const frame = grabFrame(src); if (!frame) return;
   lastSendAt = now;
   sendOne(frame, runId);
+}
+
+function startSessionClock() {
+  clearTimeout(endTimer); S.endsAt = performance.now() + SESSION_SECONDS * 1000;
+  endTimer = setTimeout(() => { if (S.running) { stop(); say('The session ended (time limit). Tap Start for another.'); } }, SESSION_SECONDS * 1000);
 }
 
 async function start() {
@@ -234,8 +251,9 @@ async function start() {
     $('go').textContent = 'Stop'; $('go').disabled = false;
     stage.classList.remove('live');
     cancelAnimationFrame(raf); raf = requestAnimationFrame(pump);
-    // 時間到就整段結束，避免空轉計費；要再看就重新按 Start
-    clearTimeout(endTimer); endTimer = setTimeout(() => { if (S.running) { stop(); say('The session ended (time limit). Tap Start for another.'); } }, SESSION_SECONDS * 1000);
+    // 暖機最多等 WARMUP_MAX_S；第一張回來後改成再跑 SESSION_SECONDS。時間到就整段結束，避免空轉計費
+    clearTimeout(endTimer); S.endsAt = performance.now() + WARMUP_MAX_S * 1000;
+    endTimer = setTimeout(() => { if (S.running) { stop(); say('No frame came back in time. Tap Start to try again.'); } }, WARMUP_MAX_S * 1000);
   } catch (e) {
     S.running = false; closeSource(); $('go').textContent = 'Start'; $('go').disabled = false;
     say(e && e.name === 'NotAllowedError' ? 'Camera permission was denied.' : String(e && e.message || e));

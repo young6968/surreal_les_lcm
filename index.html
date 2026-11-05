@@ -1689,13 +1689,15 @@ const LIVE_TIMEOUT_MS = 20000;
 const LIVE_WARMUP_TIMEOUT_MS = 100000; // 閒置後的第一張很慢（冷啟動），等久一點
 const LIVE_WARMUP_MAX_S = 110;
 const LIVE_SESSION_S = 120;          // 第一張回來後最多跑這麼久，避免忘記關掉一直扣費
+const LIVE_ANIM_DELAY_MS = 1200;     // 等超過這麼久還沒有圖，才播等待動畫；圖回來得快就完全不播
 const LIVE_BACKOFF_MS = 1500;
 const LIVE_MAX_ERR_STREAK = 6;       // 連續這麼多次失敗就停
 const LIVE_FAKE = new URLSearchParams(location.search).has('fake');   // ?fake=1：不連 Worker，把原畫面當結果，用來驗證流程
 const LIVE_DEBUG = new URLSearchParams(location.search).has('debug'); // ?debug=1：左上角顯示數字（平常不顯示數字）
+const LIVE_FORCE_LOOP = new URLSearchParams(location.search).has('loop'); // ?loop=1：測試用，上傳的照片也走連續模式
 
 class LiveFatal extends Error {}
-const live = { on: false, run: 0, inflight: 0, seq: 0, shown: 0, sent: 0, recv: 0, errors: 0, blocked: 0, streak: 0,
+const live = { animTimer: 0, single: false, revealing: false, revealed: false, on: false, run: 0, inflight: 0, seq: 0, shown: 0, sent: 0, recv: 0, errors: 0, blocked: 0, streak: 0,
                lastSend: 0, hold: 0, started: 0, firstAt: 0, lastLat: 0, lats: [], timer: 0, raf: 0, endsAt: 0, lastErr: '' };
 window.liveStats = () => ({ sent: live.sent, received: live.recv, inFlight: live.inflight, errors: live.errors, safetyBlocked: live.blocked,
   lastFrameMs: Math.round(live.lastLat), medianMs: Math.round([...live.lats].sort((a, b) => a - b)[live.lats.length >> 1] || 0), lastError: live.lastErr });
@@ -1709,7 +1711,10 @@ if (LIVE_DEBUG) {
 }
 
 async function callLive(frame, limitMs) {
-  if (LIVE_FAKE) { await new Promise(r => setTimeout(r, 450 + Math.random() * 300)); return { image: frame.url }; }
+  if (LIVE_FAKE) {   // ?fake=1 約 0.5 秒回；?fake=slow 3 秒回（測等待動畫用）
+    await new Promise(r => setTimeout(r, new URLSearchParams(location.search).get('fake') === 'slow' ? 3000 : 450 + Math.random() * 300));
+    return { image: frame.url };
+  }
   const cfg = loadCfg();
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), limitMs);
   try {
@@ -1744,28 +1749,53 @@ async function liveSend(frame, myRun) {
     if (myRun !== live.run || !live.on) return;
     live.lastLat = performance.now() - t0; live.lats.push(live.lastLat); if (live.lats.length > 40) live.lats.shift();
     live.streak = 0;
-    if (r && r.nsfw) { live.blocked++; return; }               // 安全檢查擋掉的那張不顯示，畫面維持上一張
-    if (!r || !r.image) { live.errors++; live.lastErr = 'The Worker answered without an image.'; return; }
+    if (r && r.nsfw) {                                         // 安全檢查擋掉的那張不顯示
+      live.blocked++;
+      if (live.single) liveEnd('<div class="q err">The safety filter blocked this picture.</div><small>There is nothing to show. Try another photo.</small>');
+      return;                                                  // 連續模式：畫面維持上一張
+    }
+    if (!r || !r.image) {
+      if (live.single) { liveEnd('<div class="q err">Couldn’t open the heterotopia.</div><small>The Worker answered, but without an image.</small>'); return; }
+      live.errors++; live.lastErr = 'The Worker answered without an image.'; return;
+    }
     live.recv++;
-    if (live.recv === 1) liveFirstFrame();
-    if (mySeq > live.shown) {                                  // 晚到的舊張不蓋過新的
+    if (live.recv === 1) { liveFirstFrame(); liveReveal(r.image, myRun, mySeq); return; }   // 第一張：走 V6 的橫線掃出
+    if (live.revealed && mySeq > live.shown) {                 // 之後的：直接換；晚到的舊張不蓋過新的
       live.shown = mySeq;
       result.src = r.image;
-      if (!result.classList.contains('on')) { result.classList.add('on', 'instant'); }
     }
   } catch (e) {
     if (myRun !== live.run || !live.on) return;
     if (e instanceof LiveFatal) { liveEnd(`<div class="q err">Heterotopia stopped.</div><small>${escapeHtml(e.message)}</small>`); return; }
+    if (live.single) { liveEnd(`<div class="q err">Couldn’t open the heterotopia.</div><small>${escapeHtml(String(e && e.message || e))}</small>`); return; }   // 單張：不重試
     live.errors++; live.lastErr = String(e && e.message || e).slice(0, 240);
     if (++live.streak >= LIVE_MAX_ERR_STREAK) { liveEnd(`<div class="q err">Couldn’t keep the heterotopia going.</div><small>${escapeHtml(live.lastErr)}</small>`); return; }
     live.hold = performance.now() + (e && e.backoff || LIVE_BACKOFF_MS);
   } finally { if (myRun === live.run) live.inflight = Math.max(0, live.inflight - 1); }
 }
 
+// 第一張回來：馬上顯示，不等任何動畫（動畫只是拿來填「乾等」的空檔，不能拖慢出圖）。
+// 動畫若已經開始播，unfreeze() 會立刻把它收掉；還沒開始（圖回來得快）就根本不會播。
+function liveReveal(src, myRun, seq) {
+  live.revealing = true; live.shown = seq;
+  clearTimeout(live.animTimer);
+  result.onload = () => {
+    result.onload = null;
+    if (myRun !== live.run) return;                            // 中途切回 Reality 就不再顯示
+    result.classList.remove('on'); void result.offsetWidth; result.classList.add('on', 'instant');
+    unfreeze();
+    live.revealing = false; live.revealed = true;
+    if (live.single) { liveStop(); mode = 'result'; setButtons(); }   // 上傳照片：只畫這一張，停在結果上
+    else { $('badge').classList.add('live'); $('badge').textContent = 'Live'; }
+    rec.afterResult();                                         // 錄影中：結果圖出現後再錄 2 秒就結束
+  };
+  result.src = src;
+}
+
 function liveFirstFrame() {
   live.firstAt = performance.now();
-  $('badge').classList.remove('waiting'); $('badge').classList.add('live'); $('badge').textContent = 'Live';
   clearTimeout(live.timer);
+  if (live.single) return;                                     // 單張不需要計時
   live.endsAt = performance.now() + LIVE_SESSION_S * 1000;
   live.timer = setTimeout(() => liveEnd('<div class="q">The heterotopia closed.</div><small>It stays open for two minutes at a time. Tap Heterotopia to open it again.</small>'), LIVE_SESSION_S * 1000);
 }
@@ -1774,9 +1804,10 @@ function liveTick() {
   live.raf = requestAnimationFrame(liveTick);
   if (!live.on || !source) return;
   const now = performance.now();
+  if (live.single && live.sent >= 1) return;                   // 上傳照片：只送一張
   if (live.inflight >= (live.recv ? LIVE_MAX_INFLIGHT : 1) || now - live.lastSend < LIVE_MIN_GAP_MS || now < live.hold) return;
   const [sw] = sourceSize(); if (!sw) return;
-  const f = captureFrame(LIVE_SIDE);
+  const f = captureFrame(live.single ? 768 : LIVE_SIDE);       // 單張用大一點（Worker 上限 768），連續用 512 求快
   live.lastSend = now;
   liveSend({ url: 'data:image/jpeg;base64,' + f.b64, w: f.w, h: f.h }, live.run);
 }
@@ -1785,10 +1816,17 @@ function liveStart() {
   Object.assign(live, { on: true, inflight: 0, seq: 0, shown: 0, sent: 0, recv: 0, errors: 0, blocked: 0, streak: 0, lastSend: 0, hold: 0,
     started: performance.now(), firstAt: 0, lastLat: 0, lats: [], lastErr: '' });
   live.run++;
+  live.single = !LIVE_FORCE_LOOP && source !== video;           // 上傳的照片是靜止的：只畫一張；相機才連續
+  live.revealing = false; live.revealed = false;
   mode = 'live'; setButtons();
   $('caption').classList.remove('on');
+  result.onload = null;
   result.classList.remove('on', 'instant');
-  $('badge').textContent = 'Painting…'; $('badge').classList.remove('live'); $('badge').classList.add('waiting');
+  $('badge').classList.remove('live');
+  // 先只亮「Painting…」；超過 LIVE_ANIM_DELAY_MS 還沒有圖，才播 V6 的等待動畫（凍結、方塊錯位）
+  $('badge').textContent = 'Painting…'; $('badge').classList.add('waiting');
+  clearTimeout(live.animTimer);
+  live.animTimer = setTimeout(() => { if (live.on && !live.revealed && !live.revealing) freezeFrame(); }, LIVE_ANIM_DELAY_MS);
   clearTimeout(live.timer);
   live.endsAt = performance.now() + LIVE_WARMUP_MAX_S * 1000;
   live.timer = setTimeout(() => liveEnd('<div class="q">No picture came back in time.</div><small>The painter may still be waking up. Try again in a moment.</small>'), LIVE_WARMUP_MAX_S * 1000);
@@ -1798,7 +1836,7 @@ function liveStart() {
 function liveStop() {
   if (!live.on) return;
   live.on = false; live.run++;
-  clearTimeout(live.timer); cancelAnimationFrame(live.raf);
+  clearTimeout(live.timer); clearTimeout(live.animTimer); cancelAnimationFrame(live.raf);
   $('badge').classList.remove('waiting', 'live');
 }
 
