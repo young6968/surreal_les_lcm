@@ -288,7 +288,7 @@ button:disabled { opacity: .45; cursor: default; }
   <div class="sheet">
     <h2>Connection</h2>
     <label>Worker URL
-      <input id="cfgUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://surreallens-fal-proxy.xxx.workers.dev">
+      <input id="cfgUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://surreallens-lcm-proxy.xxx.workers.dev">
     </label>
     <label>Access token
       <input id="cfgToken" type="password" autocomplete="off" placeholder="APP_ACCESS_TOKEN">
@@ -299,7 +299,7 @@ button:disabled { opacity: .45; cursor: default; }
       <button id="saveBtn" class="save">Save</button>
     </div>
     <div id="healthMsg"></div>
-    <p>Heterotopia draws through your SurrealLens fal Worker. Each tap sends that one frame once (1 call). The live bars are read on your device by a small AI model; nothing is uploaded until you tap. Settings stay on this device.</p>
+    <p>Heterotopia paints your live view through your SurrealLens fal Worker: while it is open, one frame after another is sent (about one picture every few seconds, for up to two minutes at a time). The live bars are read on your device by a small AI model. Nothing is uploaded until you tap Heterotopia. Settings stay on this device.</p>
   </div>
 </section>
 
@@ -1605,6 +1605,7 @@ function setButtons() {
 }
 
 function setReality() {
+  liveStop(); // 正在畫的話先停掉（回到 Reality = 結束準即時）
   rec.stop(true); // 錄影中回到即時鏡頭 = 結束錄影
   mode = 'real';
   unfreeze();
@@ -1615,7 +1616,9 @@ function setReality() {
   setButtons();
 }
 
-async function goHeterotopia() {
+// V6 的「按一下畫一張」流程（量標籤、組夢境句子、凍結、方塊錯位）。V7 的按鈕改接準即時（goHeterotopia），
+// 這段先保留不接，之後若要加回「拍一張」模式可以直接用。
+async function tapHeterotopia() {
   if (busy || mode !== 'real') return;
   const cfg = loadCfg();
   if (!cfg.url || !cfg.token) {
@@ -1674,8 +1677,155 @@ async function goHeterotopia() {
   }
 }
 
+// ---------- 準即時 Heterotopia ----------
+// fal 的圖生圖「即時串流（WebSocket）」端點實測沒有回應，所以改成：按下 Heterotopia 後鏡頭一直開著，
+// 一張一張用一般 HTTP 送給 Worker 的 /v1/live，前一張回來就送下一張（實測每張約 3 秒，同時 2 張在路上）。
+// 提示詞先固定，不用標籤（標籤與 CLIP 仍在面板顯示，但不影響這裡畫什麼）。
+const LIVE_PROMPT = 'a dreamlike scene where ordinary objects slowly turn into flowing sand and glass, strange quiet atmosphere, surreal photography, muted warm colors, cinematic, highly detailed';
+const LIVE_SIDE = 512;               // 送出的長邊
+const LIVE_MAX_INFLIGHT = 2;         // 同時在路上的張數（暖機期間只送 1 張）
+const LIVE_MIN_GAP_MS = 80;
+const LIVE_TIMEOUT_MS = 20000;
+const LIVE_WARMUP_TIMEOUT_MS = 100000; // 閒置後的第一張很慢（冷啟動），等久一點
+const LIVE_WARMUP_MAX_S = 110;
+const LIVE_SESSION_S = 120;          // 第一張回來後最多跑這麼久，避免忘記關掉一直扣費
+const LIVE_BACKOFF_MS = 1500;
+const LIVE_MAX_ERR_STREAK = 6;       // 連續這麼多次失敗就停
+const LIVE_FAKE = new URLSearchParams(location.search).has('fake');   // ?fake=1：不連 Worker，把原畫面當結果，用來驗證流程
+const LIVE_DEBUG = new URLSearchParams(location.search).has('debug'); // ?debug=1：左上角顯示數字（平常不顯示數字）
+
+class LiveFatal extends Error {}
+const live = { on: false, run: 0, inflight: 0, seq: 0, shown: 0, sent: 0, recv: 0, errors: 0, blocked: 0, streak: 0,
+               lastSend: 0, hold: 0, started: 0, firstAt: 0, lastLat: 0, lats: [], timer: 0, raf: 0, endsAt: 0, lastErr: '' };
+window.liveStats = () => ({ sent: live.sent, received: live.recv, inFlight: live.inflight, errors: live.errors, safetyBlocked: live.blocked,
+  lastFrameMs: Math.round(live.lastLat), medianMs: Math.round([...live.lats].sort((a, b) => a - b)[live.lats.length >> 1] || 0), lastError: live.lastErr });
+
+let liveDebugEl = null;
+if (LIVE_DEBUG) {
+  liveDebugEl = document.createElement('pre');
+  liveDebugEl.style.cssText = 'position:fixed;left:8px;top:calc(env(safe-area-inset-top) + 56px);z-index:50;margin:0;padding:6px 8px;font:11px/1.4 ui-monospace,Consolas,monospace;color:#fff;background:rgba(0,0,0,.5);border-radius:8px;pointer-events:none;white-space:pre';
+  document.body.appendChild(liveDebugEl);
+  setInterval(() => { liveDebugEl.textContent = live.on ? JSON.stringify(window.liveStats(), null, 1) : ''; }, 300);
+}
+
+async function callLive(frame, limitMs) {
+  if (LIVE_FAKE) { await new Promise(r => setTimeout(r, 450 + Math.random() * 300)); return { image: frame.url }; }
+  const cfg = loadCfg();
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), limitMs);
+  try {
+    const res = await fetch(cfg.url.replace(/\/+$/, '') + '/v1/live', {
+      method: 'POST', signal: ctl.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.token },
+      body: JSON.stringify({ image: frame.url, prompt: LIVE_PROMPT, width: frame.w, height: frame.h, strength: STRENGTH }),
+    });
+    const text = await res.text(); let body = null; try { body = JSON.parse(text); } catch (e) {}
+    if (res.status === 401) throw new LiveFatal('The access token was rejected. Go back to the first page and check it in ⚙.');
+    if (res.status === 429) {
+      // Worker 自己的上限才算致命；fal 回的 429（忙碌）只是稍等再試
+      if (body && body.error === 'daily_quota_reached') throw new LiveFatal('Today’s live quota is used up.');
+      if (body && body.error === 'rate_limited') throw new LiveFatal('Too many pictures per minute. Wait a moment and try again.');
+      const e = new Error('fal is busy (429): ' + String((body && (body.detail || body.error)) || text).slice(0, 140)); e.backoff = 6000; throw e;
+    }
+    if (!res.ok) throw new Error(describeFailure(res.status, body, text));
+    return body;
+  } catch (e) {
+    if (e instanceof LiveFatal) throw e;
+    if (e && e.name === 'AbortError') throw new Error('timed out after ' + Math.round(limitMs / 1000) + ' s');
+    if (e instanceof TypeError) throw new Error('Could not reach the Worker. Check your connection, and that this page’s address is in the Worker’s ALLOWED_ORIGINS.');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
+async function liveSend(frame, myRun) {
+  const mySeq = ++live.seq, t0 = performance.now();
+  live.sent++; live.inflight++;
+  try {
+    const r = await callLive(frame, live.recv ? LIVE_TIMEOUT_MS : LIVE_WARMUP_TIMEOUT_MS);
+    if (myRun !== live.run || !live.on) return;
+    live.lastLat = performance.now() - t0; live.lats.push(live.lastLat); if (live.lats.length > 40) live.lats.shift();
+    live.streak = 0;
+    if (r && r.nsfw) { live.blocked++; return; }               // 安全檢查擋掉的那張不顯示，畫面維持上一張
+    if (!r || !r.image) { live.errors++; live.lastErr = 'The Worker answered without an image.'; return; }
+    live.recv++;
+    if (live.recv === 1) liveFirstFrame();
+    if (mySeq > live.shown) {                                  // 晚到的舊張不蓋過新的
+      live.shown = mySeq;
+      result.src = r.image;
+      if (!result.classList.contains('on')) { result.classList.add('on', 'instant'); }
+    }
+  } catch (e) {
+    if (myRun !== live.run || !live.on) return;
+    if (e instanceof LiveFatal) { liveEnd(`<div class="q err">Heterotopia stopped.</div><small>${escapeHtml(e.message)}</small>`); return; }
+    live.errors++; live.lastErr = String(e && e.message || e).slice(0, 240);
+    if (++live.streak >= LIVE_MAX_ERR_STREAK) { liveEnd(`<div class="q err">Couldn’t keep the heterotopia going.</div><small>${escapeHtml(live.lastErr)}</small>`); return; }
+    live.hold = performance.now() + (e && e.backoff || LIVE_BACKOFF_MS);
+  } finally { if (myRun === live.run) live.inflight = Math.max(0, live.inflight - 1); }
+}
+
+function liveFirstFrame() {
+  live.firstAt = performance.now();
+  $('badge').classList.remove('waiting'); $('badge').classList.add('live'); $('badge').textContent = 'Live';
+  clearTimeout(live.timer);
+  live.endsAt = performance.now() + LIVE_SESSION_S * 1000;
+  live.timer = setTimeout(() => liveEnd('<div class="q">The heterotopia closed.</div><small>It stays open for two minutes at a time. Tap Heterotopia to open it again.</small>'), LIVE_SESSION_S * 1000);
+}
+
+function liveTick() {
+  live.raf = requestAnimationFrame(liveTick);
+  if (!live.on || !source) return;
+  const now = performance.now();
+  if (live.inflight >= (live.recv ? LIVE_MAX_INFLIGHT : 1) || now - live.lastSend < LIVE_MIN_GAP_MS || now < live.hold) return;
+  const [sw] = sourceSize(); if (!sw) return;
+  const f = captureFrame(LIVE_SIDE);
+  live.lastSend = now;
+  liveSend({ url: 'data:image/jpeg;base64,' + f.b64, w: f.w, h: f.h }, live.run);
+}
+
+function liveStart() {
+  Object.assign(live, { on: true, inflight: 0, seq: 0, shown: 0, sent: 0, recv: 0, errors: 0, blocked: 0, streak: 0, lastSend: 0, hold: 0,
+    started: performance.now(), firstAt: 0, lastLat: 0, lats: [], lastErr: '' });
+  live.run++;
+  mode = 'live'; setButtons();
+  $('caption').classList.remove('on');
+  result.classList.remove('on', 'instant');
+  $('badge').textContent = 'Painting…'; $('badge').classList.remove('live'); $('badge').classList.add('waiting');
+  clearTimeout(live.timer);
+  live.endsAt = performance.now() + LIVE_WARMUP_MAX_S * 1000;
+  live.timer = setTimeout(() => liveEnd('<div class="q">No picture came back in time.</div><small>The painter may still be waking up. Try again in a moment.</small>'), LIVE_WARMUP_MAX_S * 1000);
+  cancelAnimationFrame(live.raf); live.raf = requestAnimationFrame(liveTick);
+}
+
+function liveStop() {
+  if (!live.on) return;
+  live.on = false; live.run++;
+  clearTimeout(live.timer); cancelAnimationFrame(live.raf);
+  $('badge').classList.remove('waiting', 'live');
+}
+
+// 結束準即時、回到 Reality，並說一句為什麼
+function liveEnd(captionHtml) {
+  setReality();
+  if (captionHtml) showCaption(captionHtml, 7000);
+}
+
+function goHeterotopia() {
+  if (live.on || busy || mode !== 'real') return;
+  const cfg = loadCfg();
+  if (!cfg.url || !cfg.token) {
+    // 設定在第一頁（⚙）：這裡相機一直在跑、鍵盤會讓版面亂跳，所以不在鏡頭頁輸入
+    showCaption('<div class="q">The connection isn’t set up yet.</div><small>Tap “‹ SurrealLens” (top left) to go back, then tap ⚙ on the first page.</small>', 7000);
+    return;
+  }
+  if (!LIVE_FAKE) {
+    const [sw] = sourceSize();
+    if (!sw) return;
+  }
+  liveStart();
+}
+
 // 回第一頁：關相機、停掉鏡頭頁的運算（設定、上傳都在第一頁）
 function goHome() {
+  liveStop();
   if (busy) return;
   rec.discard();
   clearInterval(analysisTimer);
