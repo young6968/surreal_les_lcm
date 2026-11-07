@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SurrealLens V7 Live</title>
+<style>
+:root { --bg:#0b0b0d; --fg:#ecebe6; --dim:#8d8b84; --line:#2a2a2e; --ok:#9bd3a0; --warn:#e6c07a; --bad:#e08a8a; }
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display:flex; flex-direction:column; padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom); gap:12px; }
+header { display:flex; align-items:center; justify-content:space-between; padding-top:12px; }
+h1 { font-size:16px; font-weight:600; margin:0; letter-spacing:.02em; }
+button { font:inherit; color:var(--fg); background:#1b1b1f; border:1px solid var(--line); border-radius:10px; padding:10px 16px; }
+button.primary { background:var(--fg); color:#111; border-color:var(--fg); font-weight:600; }
+button:disabled { opacity:.45; }
+.stage { position:relative; width:100%; max-width:640px; margin:0 auto; aspect-ratio:1; background:#000; border-radius:14px; overflow:hidden; border:1px solid var(--line); }
+.stage img, .stage video, .stage canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+#cam { opacity:0; pointer-events:none; }
+#out { opacity:0; }
+.stage.live #out { opacity:1; }
+.stage:not(.live) #cam, .stage:not(.live) #fakeCv { opacity:1; }
+#fakeCv { opacity:0; }
+.pip { position:absolute; right:8px; bottom:8px; width:26%; aspect-ratio:1; border:1px solid rgba(255,255,255,.4); border-radius:8px; overflow:hidden; display:none; background:#000; }
+.stage.live .pip { display:block; }
+.pip canvas { width:100%; height:100%; object-fit:cover; }
+.row { max-width:640px; width:100%; margin:0 auto; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.row.sp { justify-content:space-between; }
+label { color:var(--dim); font-size:13px; display:flex; align-items:center; gap:8px; }
+input[type=range] { width:140px; }
+input[type=url], input[type=password] { width:100%; font:inherit; color:var(--fg); background:#141417; border:1px solid var(--line); border-radius:8px; padding:10px; }
+pre { margin:0; font:12px/1.5 ui-monospace, Consolas, monospace; color:var(--dim); white-space:pre-wrap; }
+#msg { color:var(--warn); min-height:1.4em; font-size:13px; }
+#verdict.ok { color:var(--ok); } #verdict.warn { color:var(--warn); } #verdict.bad { color:var(--bad); }
+#cfg { display:none; max-width:640px; width:100%; margin:0 auto; }
+#cfg.on { display:grid; gap:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SurrealLens V7 · Live</h1>
+  <button id="gear" aria-label="Connection settings">⚙</button>
+</header>
+
+<div id="cfg">
+  <input id="cfgUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://surreallens-lcm-proxy.xxx.workers.dev">
+  <input id="cfgToken" type="password" autocomplete="off" placeholder="Access token">
+  <button id="cfgSave">Save</button>
+</div>
+
+<div class="stage" id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="fakeCv" width="512" height="512"></canvas>
+  <img id="out" alt="">
+  <div class="pip"><canvas id="pip" width="128" height="128"></canvas></div>
+</div>
+
+<div class="row sp">
+  <button id="go" class="primary">Start</button>
+  <span id="verdict" class="warn">idle</span>
+</div>
+<div class="row">
+  <label>Strength <input id="strength" type="range" min="0.3" max="1" step="0.05" value="0.7"> <span id="strengthV">0.70</span></label>
+</div>
+<div class="row"><div id="msg"></div></div>
+<div class="row"><pre id="stats"></pre></div>
+
+<script>
+// ---------- 固定設定（先不用標籤提示詞，提示詞固定） ----------
+// fal 的圖生圖「即時串流（WebSocket）」端點實測沒有回應，所以改成：鏡頭一直開著，
+// 一張一張用一般 HTTP 送給 Worker（/v1/live），前一張回來就送下一張。約每秒 1–2 張，不是 100 毫秒。
+const PROMPT = 'a dreamlike scene where ordinary objects slowly turn into flowing sand and glass, strange quiet atmosphere, surreal photography, muted warm colors, cinematic, highly detailed';
+const SIDE = 512;
+const MAX_INFLIGHT = 2;       // 同時在路上的張數；2 張可以把等待時間疊起來
+const MIN_GAP_MS = 80;        // 兩次送出最短間隔
+const REQUEST_TIMEOUT_MS = 20000;
+// fal 這個圖生圖模型閒置後的第一張很慢（冷啟動，實測 20 秒不夠）：暖機期間一次只送一張，等久一點
+const WARMUP_TIMEOUT_MS = 100000;
+const WARMUP_MAX_S = 110;     // 暖機最多等這麼久，等不到就整段結束
+const SESSION_SECONDS = 120;  // 第一張回來之後，一次最多跑這麼久，避免忘記關掉一直扣費
+const STALL_MS = 3000;        // 兩張結果之間超過這麼久，算一次卡頓
+const ERROR_BACKOFF_MS = 1500;
+const DEFAULT_WORKER_URL = 'https://surreallens-lcm-proxy.surreallens-amily.workers.dev';
+const CFG_URL_KEY = 'surreallens_v7_fal_url';
+const CFG_TOKEN_KEY = 'surreallens_v7_fal_token';
+const FAKE = new URLSearchParams(location.search).has('fake');   // 不連 Worker，用假的回應驗證流程與統計
+
+const $ = id => document.getElementById(id);
+const stage = $('stage'), cam = $('cam'), out = $('out'), fakeCv = $('fakeCv'), pip = $('pip');
+
+// ---------- 連線設定（和 index.html 共用同一組） ----------
+function loadCfg() {
+  try {
+    const h = new URLSearchParams(location.hash.slice(1)).get('t');
+    if (h) { localStorage.setItem(CFG_TOKEN_KEY, h); history.replaceState(null, '', location.pathname + location.search); }
+    return { url: (localStorage.getItem(CFG_URL_KEY) || '').trim() || DEFAULT_WORKER_URL, token: localStorage.getItem(CFG_TOKEN_KEY) || '' };
+  } catch (e) { return { url: DEFAULT_WORKER_URL, token: '' }; }
+}
+$('gear').onclick = () => { const c = loadCfg(); $('cfgUrl').value = c.url; $('cfgToken').value = c.token; $('cfg').classList.toggle('on'); };
+$('cfgSave').onclick = () => {
+  try { localStorage.setItem(CFG_URL_KEY, $('cfgUrl').value.trim()); localStorage.setItem(CFG_TOKEN_KEY, $('cfgToken').value); } catch (e) {}
+  $('cfg').classList.remove('on'); say('Saved.');
+};
+$('strength').oninput = e => $('strengthV').textContent = (+e.target.value).toFixed(2);
+function say(t) { $('msg').textContent = t || ''; }
+
+// ---------- 畫面來源：鏡頭，或假模式的合成畫面 ----------
+let stream = null, fakeTimer = 0;
+async function openSource() {
+  if (FAKE) {
+    const g = fakeCv.getContext('2d'); let t = 0;
+    fakeTimer = setInterval(() => {
+      t += 1;
+      g.fillStyle = '#222'; g.fillRect(0, 0, SIDE, SIDE);
+      g.fillStyle = `hsl(${(t * 4) % 360} 60% 55%)`; g.beginPath(); g.arc(256 + 160 * Math.cos(t / 12), 256 + 160 * Math.sin(t / 9), 60, 0, 7); g.fill();
+      g.fillStyle = '#fff'; g.font = '28px sans-serif'; g.fillText('fake frame ' + t, 20, 40);
+    }, 33);
+    return fakeCv;
+  }
+  stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  cam.srcObject = stream; await cam.play();
+  return cam;
+}
+function closeSource() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; cam.srcObject = null; clearInterval(fakeTimer);
+}
+const grab = document.createElement('canvas'); grab.width = grab.height = SIDE;
+const gctx = grab.getContext('2d');
+function grabFrame(src) {
+  const sw = src.videoWidth || src.width, sh = src.videoHeight || src.height;
+  if (!sw || !sh) return null;
+  const s = Math.min(sw, sh), sx = (sw - s) / 2, sy = (sh - s) / 2;     // 置中裁成正方形
+  gctx.drawImage(src, sx, sy, s, s, 0, 0, SIDE, SIDE);
+  pip.getContext('2d').drawImage(grab, 0, 0, 128, 128);
+  return grab.toDataURL('image/jpeg', 0.7);
+}
+
+// ---------- 送一張給 Worker ----------
+class FatalError extends Error {}
+async function liveFrame(frame) {
+  if (FAKE) {
+    await new Promise(r => setTimeout(r, 450 + Math.random() * 300));
+    return { image: frame };
+  }
+  const cfg = loadCfg();
+  if (!cfg.token) throw new FatalError('No access token yet. Tap ⚙ and paste it.');
+  const limit = S.recv ? REQUEST_TIMEOUT_MS : WARMUP_TIMEOUT_MS;
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), limit);
+  try {
+    const res = await fetch(cfg.url.replace(/\/+$/, '') + '/v1/live', {
+      method: 'POST', signal: ctl.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.token },
+      body: JSON.stringify({ image: frame, prompt: PROMPT, width: SIDE, height: SIDE, strength: +$('strength').value }),
+    });
+    const text = await res.text(); let body = null; try { body = JSON.parse(text); } catch (e) {}
+    if (res.status === 401) throw new FatalError('The access token was rejected. Check it in ⚙.');
+    if (res.status === 429) {
+      // Worker 自己的上限（每分鐘 / 每天）才算致命；fal 回的 429（忙碌、同時請求太多）只是稍等再試
+      if (body && body.error === 'daily_quota_reached') throw new FatalError('Today’s live-frame quota is used up.');
+      if (body && body.error === 'rate_limited') throw new FatalError('The Worker’s per-minute limit was hit (' + (body.scope || '') + '). Wait a bit and start again.');
+      const err = new Error('fal is busy (HTTP 429): ' + String((body && (body.detail || body.error)) || text).slice(0, 160));
+      err.backoff = 6000;
+      throw err;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status + (body && body.upstreamStatus ? ' (fal ' + body.upstreamStatus + ')' : '') + ': ' + String((body && (body.detail || body.error)) || text).slice(0, 200));
+    return body;
+  } catch (e) {
+    if (e instanceof FatalError) throw e;
+    if (e && e.name === 'AbortError') throw new Error('timed out after ' + limit / 1000 + ' s');
+    if (e instanceof TypeError) throw new Error('could not reach the Worker (is this page’s address in ALLOWED_ORIGINS?)');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
+// ---------- 統計 ----------
+const S = { running: false, startedAt: 0, firstAt: 0, sent: 0, recv: 0, errors: 0, timeouts: 0, stalls: 0, nsfw: 0,
+            lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: 0, lastErr: '', shownSeq: 0, endsAt: 0 };
+function resetStats() { Object.assign(S, { startedAt: performance.now(), firstAt: 0, sent: 0, recv: 0, errors: 0, timeouts: 0, stalls: 0, nsfw: 0,
+  lastRecvAt: 0, maxGap: 0, recvTimes: [], lats: [], lastLat: 0, inflight: 0, lastErr: '', shownSeq: 0 }); }
+function pct(arr, p) { if (!arr.length) return 0; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * p))]; }
+function render() {
+  const now = performance.now();
+  S.recvTimes = S.recvTimes.filter(t => now - t < 10000);
+  const fps = S.recvTimes.length / Math.min(10, Math.max(1, (now - S.startedAt) / 1000));
+  const lats = S.lats.slice(-40);
+  const left = S.running ? Math.max(0, Math.round((S.endsAt - now) / 1000)) : 0;
+  $('stats').textContent =
+    `frames sent ${S.sent} · received ${S.recv} · in flight ${S.inflight}\n` +
+    `fps (last 10 s) ${fps.toFixed(1)} · per-frame time last ${Math.round(S.lastLat)} ms · median ${Math.round(pct(lats, .5))} ms · p95 ${Math.round(pct(lats, .95))} ms\n` +
+    `first frame ${S.firstAt ? Math.round(S.firstAt - S.startedAt) + ' ms after start' : '—'} · longest gap ${Math.round(S.maxGap)} ms · stalls (>${STALL_MS} ms) ${S.stalls}\n` +
+    `errors ${S.errors} · timeouts ${S.timeouts}${S.nsfw ? ' · safety-blocked ' + S.nsfw : ''}${S.running ? ' · session ends in ' + left + ' s' : ''}` +
+    (S.lastErr ? `\nlast error: ${S.lastErr}` : '');
+  const v = $('verdict');
+  if (!S.running) return;
+  if (!S.recv) { v.textContent = 'warming up… ' + Math.round((now - S.startedAt) / 1000) + ' s (first frame can be slow)'; v.className = 'warn'; return; }
+  const recent = (now - S.lastRecvAt) < STALL_MS;
+  // 實測每張約 3 秒、同時 2 張在路上，約每秒 0.5–0.7 張，所以門檻放在這個量級
+  if (fps >= 0.4 && S.errors === 0 && recent) { v.textContent = 'loop steady'; v.className = 'ok'; }
+  else if (fps >= 0.15 && recent) { v.textContent = 'loop slow / uneven'; v.className = 'warn'; }
+  else { v.textContent = 'loop struggling'; v.className = 'bad'; }
+}
+setInterval(render, 250);
+
+// ---------- 主迴圈 ----------
+let src = null, raf = 0, lastSendAt = 0, endTimer = 0, seq = 0, holdUntil = 0, runId = 0;
+
+async function sendOne(frame, myRun) {
+  const mySeq = ++seq, t0 = performance.now();
+  S.sent++; S.inflight++;
+  try {
+    const r = await liveFrame(frame);
+    if (myRun !== runId || !S.running) return;
+    const now = performance.now();
+    S.lastLat = now - t0; S.lats.push(S.lastLat);
+    if (r && r.nsfw) { S.nsfw++; return; }
+    if (!r || !r.image) { S.errors++; S.lastErr = 'the Worker answered without an image'; return; }
+    if (S.lastRecvAt) { const gap = now - S.lastRecvAt; if (gap > S.maxGap) S.maxGap = gap; if (gap > STALL_MS) S.stalls++; }
+    else { S.firstAt = now; startSessionClock(); }
+    S.lastRecvAt = now; S.recv++; S.recvTimes.push(now);
+    if (mySeq > S.shownSeq) { S.shownSeq = mySeq; out.src = r.image; stage.classList.add('live'); }   // 晚到的舊張不蓋過新的
+  } catch (e) {
+    if (myRun !== runId || !S.running) return;
+    if (e instanceof FatalError) { say(e.message); stop(); return; }
+    S.errors++; S.lastErr = String(e && e.message || e).slice(0, 240);
+    if (/timed out/.test(S.lastErr)) S.timeouts++;
+    holdUntil = performance.now() + (e && e.backoff || ERROR_BACKOFF_MS);   // 出錯就先停一下，不要連環狂送
+  } finally { if (myRun === runId) S.inflight = Math.max(0, S.inflight - 1); }
+}
+
+function pump() {
+  raf = requestAnimationFrame(pump);
+  if (!S.running) return;
+  const now = performance.now();
+  if (S.inflight >= (S.recv ? MAX_INFLIGHT : 1) || now - lastSendAt < MIN_GAP_MS || now < holdUntil) return;
+  const frame = grabFrame(src); if (!frame) return;
+  lastSendAt = now;
+  sendOne(frame, runId);
+}
+
+function startSessionClock() {
+  clearTimeout(endTimer); S.endsAt = performance.now() + SESSION_SECONDS * 1000;
+  endTimer = setTimeout(() => { if (S.running) { stop(); say('The session ended (time limit). Tap Start for another.'); } }, SESSION_SECONDS * 1000);
+}
+
+async function start() {
+  say(''); $('go').disabled = true;
+  try {
+    src = await openSource();
+    runId++; resetStats(); S.running = true; holdUntil = 0; lastSendAt = 0;
+    $('go').textContent = 'Stop'; $('go').disabled = false;
+    stage.classList.remove('live');
+    cancelAnimationFrame(raf); raf = requestAnimationFrame(pump);
+    // 暖機最多等 WARMUP_MAX_S；第一張回來後改成再跑 SESSION_SECONDS。時間到就整段結束，避免空轉計費
+    clearTimeout(endTimer); S.endsAt = performance.now() + WARMUP_MAX_S * 1000;
+    endTimer = setTimeout(() => { if (S.running) { stop(); say('No frame came back in time. Tap Start to try again.'); } }, WARMUP_MAX_S * 1000);
+  } catch (e) {
+    S.running = false; closeSource(); $('go').textContent = 'Start'; $('go').disabled = false;
+    say(e && e.name === 'NotAllowedError' ? 'Camera permission was denied.' : String(e && e.message || e));
+  }
+}
+function stop() {
+  S.running = false; runId++; clearTimeout(endTimer); cancelAnimationFrame(raf);
+  closeSource(); stage.classList.remove('live');
+  $('go').textContent = 'Start'; $('go').disabled = false;
+  $('verdict').textContent = 'stopped'; $('verdict').className = 'warn';
+}
+$('go').onclick = () => (S.running ? stop() : start());
+window.addEventListener('pagehide', stop);
+if (FAKE) say('Fake mode: no Worker call, a simulated reply to check the loop and the numbers.');
+</script>
+</body>
+</html>
