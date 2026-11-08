@@ -262,45 +262,54 @@ button:disabled { opacity: .45; cursor: default; }
 #gempty[hidden] { display: none; }
 .gtop .gl { display: flex; align-items: center; gap: 10px; }
 
-/* 白色 Gallery：舊作品，沿斜線疊成一串（參考 Pablo Escudero 的版面）；點標籤字就把符合的拉到前面 */
-#gwhite { position: absolute; inset: 0; z-index: 1; isolation: isolate; display: none; overflow-y: auto; overflow-x: hidden; background: #fff; color: var(--ink);
-  padding: calc(64px + env(safe-area-inset-top)) 0 90px; }
+/* 白色 Gallery：單螢幕空間式畫廊。同一批作品依目前標籤分數，重新分布成前景／背景；十個標籤散布在畫面中當作可點的文字座標，不再是一條水平導覽列 */
+#gwhite { position: absolute; inset: 0; z-index: 1; isolation: isolate; display: none; overflow: hidden; background: #fff; color: var(--ink); }
 #gallery.white { background: #fff; color: var(--ink); }
 #gallery.white #gstage { display: none; }
 #gallery.white #gwhite { display: block; }
 #gallery.white .orb { background: radial-gradient(circle, rgba(21,21,21,.85) 0, rgba(21,21,21,.6) 12%, rgba(21,21,21,.32) 30%, rgba(21,21,21,.11) 50%, rgba(21,21,21,0) 70%);
   filter: none; }
-.whead { padding: 0 clamp(18px, 5vw, 60px) 18px; }
-.whead .gtitle { color: var(--ink); }
-.whead .gsub { color: var(--ink-soft); max-width: 46ch; }
-#wbar { position: sticky; top: 0; z-index: 5000; display: flex; flex-wrap: wrap; gap: 4px 2px; align-items: center;
-  padding: 12px clamp(14px, 5vw, 56px); background: rgba(255,255,255,.94); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  border-bottom: 1px solid rgba(31,42,39,.08); }
-#wbar button { font-size: 15px; letter-spacing: .1em; padding: 6px 12px; border-radius: 999px; color: var(--ink); }
-#wbar button.on { background: var(--ink); color: #fff; }
-#wcanvas { position: relative; width: 100%; }
-.wc { position: absolute; left: 0; top: 0; padding: 5px; background: #fff; box-shadow: 0 4px 18px rgba(0,0,0,.17); cursor: pointer;
-  transform-origin: 0 0; transition: transform .85s cubic-bezier(.2,.7,.2,1), opacity .6s ease; will-change: transform; }
-.wc img { display: block; width: 100%; height: auto; }
-.wc .tags { position: absolute; left: 5px; right: 5px; bottom: 5px; display: flex; flex-wrap: wrap; gap: 2px 9px; padding: 22px 8px 7px;
-  font-size: 11px; letter-spacing: .06em; color: #fff; background: linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0)); opacity: 0; transition: opacity .25s; pointer-events: none; }
-.wc:hover .tags, .wc.hit .tags { opacity: 1; }
+.whead { position: absolute; left: clamp(14px, 3vw, 26px); top: calc(50px + env(safe-area-inset-top)); z-index: 40; max-width: 24ch; pointer-events: none; }
+.whead .gtitle { color: var(--ink); font-size: 13px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; opacity: .7; }
+/* 標籤：散布在畫面各處的純文字座標，容器蓋滿整個畫布但自己不吃點擊，只有文字本身可點 */
+#wlabels { position: absolute; inset: 0; z-index: 60; pointer-events: none; }
+.wlabel { position: absolute; left: 0; top: 0; pointer-events: auto; font-size: 13px; letter-spacing: .1em; color: var(--ink-soft);
+  padding: 3px 2px; transition: color .2s, opacity .2s, transform .5s cubic-bezier(.2,.7,.2,1);
+  /* 白色柔光暈，確保疊在任何照片上方時文字仍然可讀，同時保持純文字、不加厚重背景 */
+  text-shadow: 0 0 2px #fff, 0 0 5px #fff, 0 0 9px #fff, 0 0 14px #fff; }
+.wlabel:hover { color: var(--ink); }
+.wlabel.on { color: var(--ink); font-weight: 600; }
+.wlabel.on::after { content: ""; display: block; height: 1px; margin-top: 3px; background: var(--ink);
+  text-shadow: none; box-shadow: 0 0 5px #fff, 0 0 9px #fff; }
+#wcanvas { position: absolute; inset: 0; z-index: 1; }
+.wc { position: absolute; left: 0; top: 0; cursor: pointer; transform-origin: 0 0;
+  transition: transform .7s cubic-bezier(.2,.7,.2,1), width .7s cubic-bezier(.2,.7,.2,1), opacity .5s ease;
+  will-change: transform; box-shadow: 0 2px 14px rgba(31,42,39,.1); }
+.wc img { display: block; width: 100%; height: auto; border-radius: 1px; }
+.wc .tags { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 2px 8px; padding: 18px 8px 6px;
+  font-size: 10px; letter-spacing: .05em; color: #fff; background: linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0)); opacity: 0; transition: opacity .25s; pointer-events: none; }
+.wc:hover { z-index: 500 !important; }
+.wc:hover .tags { opacity: 1; }
 #gmenu { position: fixed; z-index: 230; min-width: 120px; padding: 4px; border-radius: 10px; background: rgba(28,32,31,.96); box-shadow: 0 10px 30px rgba(0,0,0,.5); }
 #gmenu[hidden] { display: none; }
 /* 手指好按：光暈的點按範圍加大到約 46px */
 .orb::before { content: ""; position: absolute; inset: -12px; }
-/* 白色版：上方列蓋一層白，標籤列貼在它下面，卷動時不會和「‹ Gallery」疊在一起 */
 #gallery.white .gtop { background: linear-gradient(#fff 72%, rgba(255,255,255,0)); padding-bottom: 14px; }
-#wbar { top: calc(52px + env(safe-area-inset-top)); }
-@media (max-width: 700px) {
+/* 窄螢幕：改成可捲動、觸控友善的簡單排列，不強行套用桌機的空間構圖 */
+@media (max-width: 760px) {
   .gc { top: 51%; }
   #gstage .gsub { display: none; }
   .ghead { top: calc(60px + env(safe-area-inset-top)); }
   #gcap { bottom: calc(20px + env(safe-area-inset-bottom)); padding: 0 14px; }
-  #wbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 0; }
-  #wbar::-webkit-scrollbar { display: none; }
-  #wbar button { flex: none; padding: 8px 13px; font-size: 16px; }
-  .whead .gsub { font-size: 11px; }
+  #gwhite { overflow-y: auto; overflow-x: hidden; }
+  .whead { position: static; padding: calc(56px + env(safe-area-inset-top)) 16px 2px; max-width: none; }
+  #wlabels.row { position: static; display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 4px; padding: 6px 12px 10px; scrollbar-width: none; }
+  #wlabels.row::-webkit-scrollbar { display: none; }
+  #wlabels.row .wlabel { position: static; transform: none !important; flex: none; font-size: 14px; padding: 6px 11px; border-radius: 999px; background: rgba(31,42,39,.06); }
+  #wlabels.row .wlabel.on { background: var(--ink); color: #fff; }
+  #wlabels.row .wlabel.on::after { display: none; }
+  #wcanvas.flow { position: static; display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 4px 12px 32px; }
+  #wcanvas.flow .wc { position: static; width: auto !important; transform: none !important; }
 }
 #gmenu button { display: block; width: 100%; text-align: left; padding: 9px 14px; border-radius: 7px; font-size: 14px; color: #ff8a7a; }
 #gmenu button:hover { background: rgba(255,255,255,.1); }
@@ -399,18 +408,17 @@ button:disabled { opacity: .45; cursor: default; }
     <div id="grail"></div>
     <div class="ghead">
       <h2 class="gtitle">Gallery</h2>
-      <p class="gsub">Pictures made from your uploaded photos, and the videos you record. Kept on this device only — your phone and your computer each keep their own.</p>
+      <p class="gsub">Pictures made from your uploaded photos, and the videos you record. Photos are shared with your other devices that use the same access token; videos stay on the device that recorded them.</p>
     </div>
     <div id="gcap"></div>
-    <p id="gempty" hidden>Nothing here yet. Upload a photo and tap Reading, or record a video, and it will appear here. It is kept on this device only.</p>
+    <p id="gempty" hidden>Nothing here yet. Upload a photo and tap Reading, or record a video, and it will appear here. Photos sync to your other devices through the Worker.</p>
   </div>
-  <!-- 白色 Gallery：舊作品（120 張），依十個標籤排序 -->
+  <!-- 白色 Gallery：舊作品（120 張），單螢幕空間式畫廊，依十個散布的標籤分數分前景／背景 -->
   <div id="gwhite">
     <div class="whead">
       <h2 class="gtitle">Gallery</h2>
-      <p class="gsub">Earlier works, each read against the ten labels. Pick a word to bring the pictures that fit it forward; the rest gather behind.</p>
     </div>
-    <div id="wbar"></div>
+    <div id="wlabels"></div>
     <div id="wcanvas"></div>
   </div>
   <div id="gmenu" hidden><button id="gmenuDel">Delete</button></div>
@@ -1581,7 +1589,9 @@ function describeFailure(status, body, text) {
   if (status === 429) return 'Too many requests right now. Wait a minute and try again.';
   if (status === 413) return 'The frame was too large to send.';
   if (slug === 'fal_key_not_configured') return 'The Worker has no fal key yet. Set it with wrangler (see the setup notes).';
-  return `The Worker or fal returned an error (HTTP ${status}): ${String(slug || text).slice(0, 160)}`;
+  // V9：連 fal 回的原因（Worker 放在 detail）一起顯示，才知道是尺寸、額度還是別的問題
+  const detail = body && body.detail ? ' — ' + String(body.detail).slice(0, 220) : '';
+  return `The Worker or fal returned an error (HTTP ${status}): ${String(slug || text).slice(0, 160)}${detail}`;
 }
 
 function captureFrame(maxSide) {
@@ -2224,6 +2234,87 @@ const gallery = (() => {
     tx.objectStore('items').delete(id); tx.objectStore('blobs').delete(id);
     await done(tx);
   }
+  async function putItem(it) { const d = await open(), tx = d.transaction('items', 'readwrite'); tx.objectStore('items').put(it); await done(tx); }
+
+  // ---- 雲端同步（照片：縮圖、結果、原照片、分析圖；影片只留在錄的那台裝置） ----
+  // 兩台裝置填同一組通行碼 = 同一份 Gallery。每張照片有跨裝置唯一的 uid（本機的 id 每台不一樣，不能用）。
+  // 流程（打開 Gallery、以及剛存完一張時各跑一次）：
+  //   ① 把「刪除時沒連上網」的待刪清單送出  ② 本機有、雲端沒有的照片 → 上傳（meta 最後送，送了才會出現在清單）
+  //   ③ 雲端有、本機沒有的 → 下載進本機  ④ 本機標記已同步、但雲端清單裡沒有了 → 在別台刪掉了，本機也刪（剛上傳的 3 分鐘內不算，KV 清單有延遲）
+  // 沒設定通行碼或連不上就安靜略過，作品都還在本機。
+  const PENDING_KEY = 'surreallens_gallery_pending_deletes';
+  const newUid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const pendingDeletes = () => { try { return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]'); } catch (e) { return []; } };
+  const setPending = a => { try { localStorage.setItem(PENDING_KEY, JSON.stringify(a)); } catch (e) {} };
+  const cloudCfg = () => { const c = loadCfg(); return c.url && c.token ? { base: c.url.replace(/\/+$/, '') + '/v1/gallery', token: c.token } : null; };
+  async function cloud(path, init) {
+    const c = cloudCfg(); if (!c) throw new Error('no cloud config');
+    const res = await fetch(c.base + path, { ...init, headers: { Authorization: 'Bearer ' + c.token, ...(init && init.headers || {}) } });
+    if (!res.ok) throw new Error('cloud ' + res.status);
+    return res;
+  }
+  async function pushItem(it) {
+    const bl = await blobsOf(it.id); if (!bl) return;
+    const put = (part, blob) => cloud('/' + it.uid + '/' + part, { method: 'PUT', headers: { 'Content-Type': blob.type || 'image/jpeg' }, body: blob });
+    if (it.thumb) await put('thumb', it.thumb);
+    if (bl.result) await put('result', bl.result);
+    if (bl.original) await put('original', bl.original);
+    if (bl.analysis) await put('analysis', bl.analysis);
+    await cloud('/' + it.uid, { method: 'PUT', body: JSON.stringify({ createdAt: it.createdAt, ar: it.ar || 1, o: !!bl.original, a: !!bl.analysis }) });
+    it.synced = true; it.syncedAt = Date.now(); await putItem(it);
+  }
+  async function pullItem(c) {
+    const get = async part => { try { return await (await cloud('/' + c.id + '/' + part)).blob(); } catch (e) { return null; } };
+    const [thumb, result, original, analysis] = await Promise.all([get('thumb'), get('result'), c.o ? get('original') : null, c.a ? get('analysis') : null]);
+    if (!result) return false;
+    await add({ kind: 'photo', uid: c.id, createdAt: c.createdAt, ar: c.ar || 1, thumb: thumb || null, synced: true, syncedAt: Date.now() }, { result, original, analysis });
+    return true;
+  }
+  let syncing = false, syncAgain = false;
+  async function sync() {
+    if (!cloudCfg()) return;
+    if (syncing) { syncAgain = true; return; }
+    syncing = true;
+    let changed = false;
+    try {
+      // ① 待刪
+      let pend = pendingDeletes();
+      if (pend.length) {
+        const left = [];
+        for (const uid of pend) { try { await cloud('/' + uid, { method: 'DELETE' }); } catch (e) { left.push(uid); } }
+        setPending(left); pend = left;
+      }
+      const cloudList = (await (await cloud('')).json()).items || [];
+      const cloudIds = new Set(cloudList.map(x => x.id));
+      let local = await list();
+      // 舊的、還沒有 uid 的本機照片補上
+      for (const it of local) if (it.kind === 'photo' && !it.uid) { it.uid = newUid(); await putItem(it); }
+      // ④ 別台刪掉的
+      for (const it of local) {
+        if (it.kind === 'photo' && it.synced && !cloudIds.has(it.uid) && Date.now() - (it.syncedAt || 0) > 180000) { await remove(it.id); changed = true; }
+      }
+      local = await list();
+      const localUids = new Set(local.filter(x => x.uid).map(x => x.uid));
+      // ② 上傳
+      for (const it of local) if (it.kind === 'photo' && it.uid && !cloudIds.has(it.uid)) { try { await pushItem(it); } catch (e) { console.warn('gallery push failed', e); break; } }
+      // ③ 下載
+      for (const c of cloudList) {
+        if (localUids.has(c.id) || pend.includes(c.id)) continue;
+        try { if (await pullItem(c)) changed = true; } catch (e) { console.warn('gallery pull failed', e); break; }
+      }
+    } catch (e) { console.warn('gallery sync skipped', e && e.message); }
+    finally { syncing = false; }
+    if (changed && root.classList.contains('on') && gmode === 'dark') rerenderKeep();
+    if (syncAgain) { syncAgain = false; sync(); }
+  }
+  // 刪除：本機先刪；雲端能刪就刪，連不上就記在待刪清單，下次同步再送
+  async function deleteItem(it) {
+    await remove(it.id);
+    if (it.uid && cloudCfg()) {
+      try { await cloud('/' + it.uid, { method: 'DELETE' }); }
+      catch (e) { const p = pendingDeletes(); if (!p.includes(it.uid)) { p.push(it.uid); setPending(p); } }
+    }
+  }
 
   // ---- 縮圖 ----
   function thumbFrom(src, sw, sh) {
@@ -2252,9 +2343,10 @@ const gallery = (() => {
       const oc = document.createElement('canvas'); oc.width = Math.round(sw * s); oc.height = Math.round(sh * s);
       oc.getContext('2d').drawImage(still, 0, 0, oc.width, oc.height);
       const orig = await new Promise(r => oc.toBlob(r, 'image/jpeg', .85));
-      await add({ kind: 'photo', createdAt: Date.now(), thumb: th && th.blob, ar: th ? th.w / th.h : 1 },
+      await add({ kind: 'photo', uid: newUid(), createdAt: Date.now(), thumb: th && th.blob, ar: th ? th.w / th.h : 1 },
                 { result: resBlob, original: orig, analysis: analysisBlobCur || null });
       toast('Saved to Gallery.', 2500);
+      sync();   // 背景上傳到雲端（有設定通行碼才會做）
     } catch (e) {
       console.warn('gallery save failed', e);
       toast('Couldn’t save to the Gallery (storage may be full or blocked).', 5000);
@@ -2366,7 +2458,14 @@ const gallery = (() => {
     hideMenu(); closeView();
     if (m === 'white') renderWhite(); else render();
   }
-  function openGallery() { root.classList.add('on'); setMode(gmode); }
+  // 同步後有變動時重畫，但停在原本看的那一張
+  async function rerenderKeep() {
+    const u = items[Math.round(pos)] && items[Math.round(pos)].uid;
+    await render();
+    const i = u ? items.findIndex(x => x.uid === u) : -1;
+    if (i >= 0) { pos = target = i; layout(); }
+  }
+  function openGallery() { root.classList.add('on'); setMode(gmode); sync(); }
   function closeGallery() { closeView(); hideMenu(); root.classList.remove('on'); }
 
   // ---- 黑色：右鍵（手機長按）刪除 ----
@@ -2380,7 +2479,7 @@ const gallery = (() => {
   $('gmenuDel').addEventListener('click', async () => {
     const it = menuIt; hideMenu();
     if (!it || !confirm('Delete this from the Gallery? This can’t be undone.')) return;
-    try { await remove(it.id); } catch (e) { toast('Could not delete it.', 3000); return; }
+    try { await deleteItem(it); } catch (e) { toast('Could not delete it.', 3000); return; }
     render(Math.max(0, Math.min(Math.round(pos), items.length - 2)));
   });
   addEventListener('pointerdown', e => { if (!$('gmenu').hidden && !e.target.closest('#gmenu')) hideMenu(); }, true);
@@ -2397,25 +2496,45 @@ const gallery = (() => {
   addEventListener('pointermove', e => { if (pressTimer && drag && Math.abs(e.clientX - drag.x) > 8) clearTimeout(pressTimer); });
   addEventListener('pointerup', () => clearTimeout(pressTimer));
 
-  // ---- 白色：舊作品，依標籤排序 ----
+  // ---- 白色：舊作品，同一批照片依目前標籤分數重新分布成前景／背景的單螢幕空間畫廊 ----
   // 資料：old_scores.json（每張圖對十個標籤的百分比，由我逐張看過後標的前三名；其餘為 0）。圖在 old1/、old2/。
-  // 不選標籤：全部沿斜線疊成一串。選了標籤：前三名裡有它的圖（依百分比高到低）排在最上面，排開、盡量不互相遮住；
-  // 其餘的縮小、重疊擠在下面和後面（疊到沒關係）。
-  let wdata = null, wsel = null, wcards = [];
+  // 版面用低差異序列（Halton）＋固定雜湊做出穩定、可重現、但看起來自由散落的構圖——不是 Math.random()：
+  // 同一個視窗尺寸、同一個標籤，每次重畫位置都一樣；換標籤或換視窗尺寸才會跟著變，並以過渡動畫平滑移動過去。
+  let wdata = null, wsel = null, wcards = [], wlabelEls = [];
   async function loadWhite() {
     if (wdata) return wdata;
     try { wdata = await (await fetch('old_scores.json')).json(); } catch (e) { wdata = { labels: [], items: [] }; }
     return wdata;
   }
   const top3Of = it => [...it.p.keys()].filter(i => it.p[i] > 0).sort((a, b) => it.p[b] - it.p[a]).slice(0, 3);
+
+  // 十個標籤散布的位置（畫面寬高的比例，手工排在邊緣與角落，中間留給照片），位置本身不隨點擊跳動
+  const LABEL_POS = [
+    { x: .13, y: .11 }, { x: .39, y: .07 }, { x: .66, y: .10 }, { x: .89, y: .22 },
+    { x: .92, y: .50 }, { x: .85, y: .80 }, { x: .58, y: .92 }, { x: .30, y: .93 },
+    { x: .09, y: .77 }, { x: .05, y: .42 },
+  ];
+  const ALL_POS = { x: .06, y: .15 };
+
+  function hash01(n) { const x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); }
+  function halton(i, base) { let f = 1, r = 0, n = i; while (n > 0) { f /= base; r += f * (n % base); n = Math.floor(n / base); } return r; }
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp01 = v => Math.max(0, Math.min(1, v));
+  const clampRange = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
   async function renderWhite() {
     const d = await loadWhite();
-    const canvas = $('wcanvas'), bar = $('wbar');
+    const canvas = $('wcanvas'), labelsHost = $('wlabels');
     if (!wcards.length) {
-      canvas.textContent = ''; bar.textContent = '';
+      canvas.textContent = ''; labelsHost.textContent = ''; wlabelEls = [];
       if (!d.items.length) { canvas.innerHTML = '<p class="gsub" style="padding:24px clamp(18px,5vw,60px)">The earlier works could not be loaded here.</p>'; return; }
-      const mk = (label, k) => { const b = document.createElement('button'); b.textContent = label; b.dataset.k = k; b.addEventListener('click', () => selectLabel(wsel === k || k === 'all' ? null : +k)); bar.appendChild(b); };
-      mk('All', 'all'); d.labels.forEach((l, i) => mk(l.name, i));
+      const mkLabel = (text, k, pos) => {
+        const b = document.createElement('button'); b.className = 'wlabel'; b.textContent = text; b.dataset.k = k;
+        b.addEventListener('click', () => selectLabel(k === 'all' ? null : (wsel === +k ? null : +k)));
+        labelsHost.appendChild(b); wlabelEls.push(b);
+      };
+      mkLabel('All', 'all', ALL_POS);
+      d.labels.forEach((l, i) => mkLabel(l.name, i, LABEL_POS[i] || { x: .5, y: .5 }));
       d.items.forEach((it, i) => {
         const el = document.createElement('div'); el.className = 'wc';
         const tags = top3Of(it).map(k => `<span>${d.labels[k].name} ${it.p[k]}%</span>`).join('');
@@ -2427,59 +2546,111 @@ const gallery = (() => {
     syncBar(); layoutWhite();
   }
   function syncBar() {
-    $('wbar').querySelectorAll('button').forEach(b => {
-      const on = wsel == null ? b.dataset.k === 'all' : +b.dataset.k === wsel && b.dataset.k !== 'all';
+    wlabelEls.forEach(b => {
+      const k = b.dataset.k;
+      const on = wsel == null ? k === 'all' : (k !== 'all' && +k === wsel);
       b.classList.toggle('on', on);
-      if (on && $('wbar').scrollWidth > $('wbar').clientWidth) $('wbar').scrollTo({ left: b.offsetLeft - ($('wbar').clientWidth - b.offsetWidth) / 2, behavior: 'smooth' }); // 手機上標籤列可橫滑，選到的捲到中間
     });
   }
-  function selectLabel(k) { wsel = k; syncBar(); layoutWhite(); $('gwhite').scrollTo({ top: 0, behavior: 'smooth' }); }
+  function selectLabel(k) { wsel = k; syncBar(); layoutWhite(); }
+
+  function place(c, x, y, w, z, op) {
+    c.el.style.width = Math.round(w) + 'px';
+    c.el.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px)`;
+    c.el.style.zIndex = String(Math.round(z));
+    c.el.style.opacity = String(op);
+  }
 
   function layoutWhite() {
-    const sc = $('gwhite'), Wc = sc.clientWidth, canvas = $('wcanvas');
-    if (!Wc || !wcards.length) return;
-    const pad = Math.max(16, Math.min(60, Wc * .05));
-    const small = Wc < 700;
-    // 卡片寬（含白邊）；圖是正方形。電腦用同一個大小；手機：沒選標籤時小一點（斜疊一串），選了標籤時剛好兩欄、大一點
-    const cwDesk = Math.round(Math.max(108, Math.min(220, Wc * .17)));
-    let cw = small ? Math.round(Wc * .32) : cwDesk;
-    const cwSel = small ? Math.floor((Wc - 2 * pad - 12) / 2) : cwDesk;
-    const place = (c, x, y, s, z, op, hit) => {
-      c.el.style.width = cw + 'px';
-      c.el.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px) scale(${s})`;
-      c.el.style.zIndex = String(z); c.el.style.opacity = String(op); c.el.classList.toggle('hit', !!hit);
-    };
-    let bottom = 0;
-    if (wsel == null) {
-      // 沒選標籤：全部沿斜線往右下疊，到右邊就回左邊再來一串（像參考圖的一長串斜疊）
-      const stepX = cw * .46, stepY = cw * .24, span = Math.max(stepX, Wc - 2 * pad - cw), per = Math.max(1, Math.floor(span / stepX));
-      wcards.forEach((c, k) => {
-        const sweep = Math.floor(k / per), i = k % per;
-        const x = pad + i * (span / Math.max(1, per - 1)) * (per > 1 ? 1 : 0), y = 16 + sweep * (per * stepY + cw * .35) + i * stepY;
-        place(c, x, y, 1, 10 + k, 1, false); bottom = Math.max(bottom, y + cw);
-      });
-    } else {
-      const lab = wsel;
-      cw = cwSel;
-      const hit =wcards.filter(c => top3Of(c.it).includes(lab)).sort((a, b) => b.it.p[lab] - a.it.p[lab]);
-      const rest = wcards.filter(c => !hit.includes(c)).sort((a, b) => a.it.f.localeCompare(b.it.f));
-      // 符合的：排開（左右只重疊一點點，一列一高一低錯開），百分比高的在最前面、最上面
-      const gap = small ? cw + 12 : cw * .96, cols = Math.max(1, Math.floor((Wc - 2 * pad + (gap - cw)) / gap)), rowH = cw * 1.24;
-      hit.forEach((c, k) => {
-        const col = k % cols, row = Math.floor(k / cols);
-        const x = pad + col * gap + (cols > 1 ? (Wc - 2 * pad - ((cols - 1) * gap + cw)) / 2 : 0), y = 16 + row * rowH + (col % 2) * cw * .16;
-        place(c, x, y, 1, 1000 - k, 1, true); bottom = Math.max(bottom, y + cw);
-      });
-      // 不符合的：縮小、擠成一疊在下面（互相重疊、在後面）
-      const s = .74, w2 = cw * s, stepX = w2 * .2, stepY = w2 * .3, per = Math.max(1, Math.floor((Wc - 2 * pad - w2) / stepX));
-      const y0 = (hit.length ? bottom + 44 : 16);
-      rest.forEach((c, k) => {
-        const row = Math.floor(k / per), i = k % per;
-        const x = pad + i * stepX, y = y0 + row * stepY * 1.6 + (i % 3) * stepY * .4;
-        place(c, x, y, s, 2 + k % 40, .78, false); bottom = Math.max(bottom, y + w2);
-      });
+    const host = $('gwhite'), Wc = host.clientWidth, Hc = host.clientHeight;
+    if (!Wc || !Hc || !wcards.length) return;
+    const small = Wc < 760;
+    $('wlabels').classList.toggle('row', small);
+    $('wcanvas').classList.toggle('flow', small);
+    if (small) { layoutLabelsFlow(); layoutWhiteMobile(); return; }
+    layoutLabelsScattered(Wc, Hc);
+    layoutWhiteDesktop(Wc, Hc);
+  }
+
+  function layoutLabelsScattered(Wc, Hc) {
+    wlabelEls.forEach(b => {
+      const pos = b.dataset.k === 'all' ? ALL_POS : (LABEL_POS[+b.dataset.k] || { x: .5, y: .5 });
+      b.style.transform = `translate(${Math.round(pos.x * Wc)}px,${Math.round(pos.y * Hc)}px)`;
+    });
+  }
+  function layoutLabelsFlow() { wlabelEls.forEach(b => { b.style.transform = ''; }); }
+
+  // 單螢幕空間構圖：前景＝符合目前標籤的作品（分數>0），依分數連續映射尺寸／層級／置中程度；
+  // 背景＝不符合的作品，縮小、集中成幾個群聚、允許重疊，墊在前景之下。All 模式不分前後景，全部等量看待。
+  function layoutWhiteDesktop(Wc, Hc) {
+    const topPad = Math.round(Math.max(52, Hc * .08));
+    const bottomPad = Math.round(Math.max(16, Hc * .03));
+    const sidePad = Math.round(Math.max(18, Wc * .035));
+    const areaW = Math.max(60, Wc - sidePad * 2), areaH = Math.max(60, Hc - topPad - bottomPad);
+    const baseUnit = Math.min(areaW, areaH);
+
+    let fg, bg;
+    if (wsel == null) { fg = wcards.slice(); bg = []; }
+    else {
+      fg = wcards.filter(c => c.it.p[wsel] > 0);
+      bg = wcards.filter(c => c.it.p[wsel] === 0);
     }
-    canvas.style.height = Math.round(bottom + 70) + 'px';
+    fg = fg.slice().sort((a, b) => (wsel == null ? 0 : b.it.p[wsel] - a.it.p[wsel]));
+    bg = bg.slice().sort((a, b) => a.it.f.localeCompare(b.it.f));
+
+    // 標籤文字的位置（像素），照片中心若太靠近就推開，留出呼吸空間、不遮住標籤
+    const labelPts = [ALL_POS, ...LABEL_POS].map(p => ({ x: p.x * Wc, y: p.y * Hc }));
+    function nudgeFromLabels(cx, cy, margin) {
+      for (const lp of labelPts) {
+        const dx = cx - lp.x, dy = cy - lp.y, d = Math.hypot(dx, dy);
+        if (d < margin) { const s = margin / (d || 1); cx = lp.x + dx * s; cy = lp.y + dy * s; }
+      }
+      return [cx, cy];
+    }
+
+    // 前景：分數（連續值，非固定門檻）決定尺寸與層級，分數高者較大、較靠近中央、層級較高；
+    // 用 Halton 低差異序列鋪成疏密有變化但覆蓋均勻的散佈，加一點固定雜湊的抖動，避免看起來是網格或對角線
+    const minFg = baseUnit * (wsel == null ? .055 : .09), maxFg = baseUnit * (wsel == null ? .12 : .24);
+    fg.forEach((c, i) => {
+      const weight = wsel == null ? (.3 + hash01(i * 13 + 9) * .3) : Math.max(.14, c.it.p[wsel] / 100);
+      const w = lerp(minFg, maxFg, Math.pow(weight, .7));
+      const safeH = w * 1.3; // 直式照片的安全高度餘量，避免底部被裁切
+      const nx = clamp01(halton(i + 1, 2) + (hash01(i * 3 + 1) - .5) * .07);
+      const ny = clamp01(halton(i + 1, 3) + (hash01(i * 5 + 2) - .5) * .07);
+      let [cx, cy] = nudgeFromLabels(sidePad + nx * Math.max(0, areaW - w) + w / 2, topPad + ny * Math.max(0, areaH - safeH) + safeH / 2, w * .62 + 46);
+      const x = clampRange(cx - w / 2, sidePad, Wc - sidePad - w), y = clampRange(cy - safeH / 2, topPad, Hc - bottomPad - safeH);
+      place(c, x, y, w, 500 - i, 1);
+    });
+
+    // 背景：縮小、集中成幾個固定的群聚點，彼此重疊，但仍完整、仍可點
+    const clusterPts = [{ x: .88, y: .86 }, { x: .12, y: .9 }, { x: .5, y: .5 }, { x: .9, y: .15 }];
+    const bgW = Math.max(26, baseUnit * .065);
+    bg.forEach((c, i) => {
+      const cl = clusterPts[i % clusterPts.length];
+      const ring = Math.floor(i / clusterPts.length);
+      const ang = hash01(i * 7 + 5) * Math.PI * 2;
+      const rad = bgW * (.3 + ring * .5) * (.5 + hash01(i * 11 + 3) * .9);
+      const cx0 = sidePad + cl.x * areaW, cy0 = topPad + cl.y * areaH;
+      let [cx, cy] = nudgeFromLabels(cx0 + Math.cos(ang) * rad, cy0 + Math.sin(ang) * rad, bgW * .7 + 36);
+      const x = clampRange(cx - bgW / 2, sidePad, Wc - sidePad - bgW), y = clampRange(cy - bgW * .65, topPad, Hc - bottomPad - bgW * 1.3);
+      place(c, x, y, bgW, i, .9);
+    });
+  }
+
+  // 窄螢幕：放回簡單、可捲動、觸控友善的排列——符合標籤的在前，其餘在後，不套用桌機的空間構圖
+  function layoutWhiteMobile() {
+    const canvas = $('wcanvas');
+    let fg, bg;
+    if (wsel == null) { fg = wcards.slice(); bg = []; }
+    else {
+      fg = wcards.filter(c => c.it.p[wsel] > 0).sort((a, b) => b.it.p[wsel] - a.it.p[wsel]);
+      bg = wcards.filter(c => c.it.p[wsel] === 0);
+    }
+    [...fg, ...bg].forEach(c => {
+      c.el.style.width = ''; c.el.style.transform = ''; c.el.style.zIndex = '';
+      c.el.style.opacity = wsel != null && bg.includes(c) ? '.6' : '1';
+      canvas.appendChild(c.el);
+    });
   }
   addEventListener('resize', () => { if (root.classList.contains('on') && gmode === 'white') layoutWhite(); });
   $('galleryMode').addEventListener('click', () => setMode(gmode === 'dark' ? 'white' : 'dark'));
@@ -2561,7 +2732,7 @@ const gallery = (() => {
     const del = document.createElement('button'); del.textContent = 'Delete';
     del.addEventListener('click', async () => {
       if (!confirm('Delete this from the Gallery? This can’t be undone.')) return;
-      try { await remove(cur.it.id); } catch (e) { toast('Could not delete it.', 3000); return; }
+      try { await deleteItem(cur.it); } catch (e) { toast('Could not delete it.', 3000); return; }
       closeView(); render();
     });
     bar.append(save, del);
