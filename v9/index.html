@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=overlays-content">
 <meta name="theme-color" content="#fbfcfb">
-<title>SurrealLens V7</title>
+<title>SurrealLens V9</title>
 <style>
 :root {
   --bg: #fbfcfb;
@@ -81,6 +81,17 @@ button:disabled { opacity: .45; cursor: default; }
 
 /* ---------- 鏡頭 ---------- */
 #lens { background: #fff; }
+/* V9：#scroller 平常不捲動（照片 cover 填滿畫面，和 V7 一樣）；直式照片比視窗高時加上 .scroll，
+   #stage 變成「寬度填滿、高度依照片比例」，用滾輪／觸控往下看完整一張。 */
+#scroller { position: absolute; inset: 0; overflow: hidden; }
+#scroller.scroll { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; background: #14191a; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.35) transparent; }
+#stage { position: relative; width: 100%; height: 100%; }
+#scroller.scroll #stage { height: var(--stage-h, 100%); margin-bottom: var(--panel-h, 260px); }
+#analysis { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; opacity: .011;
+  pointer-events: auto; -webkit-touch-callout: default; -webkit-user-select: auto; user-select: auto; }
+/* 只在 Reality 模式、分析圖做好之後才出現（.on）；一旦開始畫（等待動畫）或結果圖出現，立刻讓開，結果圖才是右鍵存的那張 */
+#analysis.on { display: block; }
+#surreal.on ~ #analysis, #result.on ~ #analysis { display: none; }
 #video, #still, #surreal, #result {
   position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
 }
@@ -111,6 +122,14 @@ button:disabled { opacity: .45; cursor: default; }
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
 }
 .topbar .right { display: flex; align-items: center; gap: 6px; }
+.topbar .left { display: flex; align-items: center; gap: 10px; }
+/* 小白色光暈：之後要接 GALLERY 的入口（現在只是外觀） */
+/* 柔和的光點：沒有實心的球和輪廓，中心最亮、一路淡到透明（像散景的光斑） */
+.orb { width: 34px; height: 34px; margin: -6px; border-radius: 50%; flex: none; padding: 0; position: relative;
+  background: radial-gradient(circle, rgba(255,255,255,.95) 0, rgba(255,255,255,.72) 12%, rgba(255,255,255,.4) 30%, rgba(255,255,255,.14) 50%, rgba(255,255,255,0) 70%);
+  filter: drop-shadow(0 0 7px rgba(0,0,0,.16)); animation: orb-breathe 4s ease-in-out infinite; }
+@keyframes orb-breathe { 50% { transform: scale(1.12); opacity: .82; } }
+@media (prefers-reduced-motion: reduce) { .orb { animation: none; } }
 .brand, .pill, .badge, .gear {
   background: var(--glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 13px;
@@ -219,6 +238,82 @@ button:disabled { opacity: .45; cursor: default; }
 .sheet .actions button { padding: 10px 18px; border-radius: 999px; border: 1px solid var(--line); background: #fff; font-size: 14px; }
 .sheet .actions .save { background: var(--ink); color: #fff; border-color: var(--ink); }
 #healthMsg { font-size: 13px; line-height: 1.6; min-height: 1.6em; }
+
+/* ---------- V9 Gallery：存這台裝置上的照片結果與影片 ---------- */
+#entry > #entryOrb { position: absolute; top: calc(20px + env(safe-area-inset-top)); left: 18px; z-index: 2; }
+#gallery { position: fixed; inset: 0; z-index: 25; display: none; background: #000; color: #fff; }
+#gallery.on { display: block; }
+.gtop { position: absolute; left: 0; right: 0; top: 0; z-index: 210; display: flex; align-items: center; justify-content: space-between;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px; pointer-events: none; }
+.gtop > * { pointer-events: auto; }
+/* 黑底的弧形走廊：卡片排成一條往兩側彎進去的帶子，中間那張最大、正對你，兩側縮小、轉向中間。滾輪／拖曳／方向鍵左右移動。 */
+#gstage { position: absolute; inset: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
+  background: radial-gradient(ellipse at 50% 55%, #161b1d 0, #000 72%); }
+#grail { position: absolute; inset: 0; perspective: 1000px; perspective-origin: 50% 46%; }
+.gc { position: absolute; left: 50%; top: 47%; width: var(--cw, 280px); height: auto; display: none; cursor: pointer; will-change: transform, opacity; }
+.ghead { position: absolute; left: clamp(18px, 5vw, 60px); top: calc(64px + env(safe-area-inset-top)); z-index: 200; pointer-events: none; max-width: 38ch; }
+.gtitle { font-size: clamp(24px, 4.4vw, 40px); font-weight: 700; letter-spacing: -.01em; line-height: 1.1; color: #fff; }
+.gsub { font-size: 12px; color: rgba(255,255,255,.55); margin-top: 8px; line-height: 1.6; }
+#gcap { position: absolute; left: 0; right: 0; bottom: calc(26px + env(safe-area-inset-bottom)); z-index: 200; pointer-events: none;
+  text-align: center; font-size: 12px; letter-spacing: .14em; color: rgba(255,255,255,.78); }
+#gcap small { display: block; margin-top: 6px; letter-spacing: .06em; font-size: 11px; color: rgba(255,255,255,.45); }
+#gempty { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(80vw, 40ch); text-align: center;
+  font-size: 14px; line-height: 1.8; color: rgba(255,255,255,.7); z-index: 200; }
+#gempty[hidden] { display: none; }
+.gtop .gl { display: flex; align-items: center; gap: 10px; }
+
+/* 白色 Gallery：舊作品，沿斜線疊成一串（參考 Pablo Escudero 的版面）；點標籤字就把符合的拉到前面 */
+#gwhite { position: absolute; inset: 0; z-index: 1; isolation: isolate; display: none; overflow-y: auto; overflow-x: hidden; background: #fff; color: var(--ink);
+  padding: calc(64px + env(safe-area-inset-top)) 0 90px; }
+#gallery.white { background: #fff; color: var(--ink); }
+#gallery.white #gstage { display: none; }
+#gallery.white #gwhite { display: block; }
+#gallery.white .orb { background: radial-gradient(circle, rgba(21,21,21,.85) 0, rgba(21,21,21,.6) 12%, rgba(21,21,21,.32) 30%, rgba(21,21,21,.11) 50%, rgba(21,21,21,0) 70%);
+  filter: none; }
+.whead { padding: 0 clamp(18px, 5vw, 60px) 18px; }
+.whead .gtitle { color: var(--ink); }
+.whead .gsub { color: var(--ink-soft); max-width: 46ch; }
+#wbar { position: sticky; top: 0; z-index: 5000; display: flex; flex-wrap: wrap; gap: 4px 2px; align-items: center;
+  padding: 12px clamp(14px, 5vw, 56px); background: rgba(255,255,255,.94); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(31,42,39,.08); }
+#wbar button { font-size: 15px; letter-spacing: .1em; padding: 6px 12px; border-radius: 999px; color: var(--ink); }
+#wbar button.on { background: var(--ink); color: #fff; }
+#wcanvas { position: relative; width: 100%; }
+.wc { position: absolute; left: 0; top: 0; padding: 5px; background: #fff; box-shadow: 0 4px 18px rgba(0,0,0,.17); cursor: pointer;
+  transform-origin: 0 0; transition: transform .85s cubic-bezier(.2,.7,.2,1), opacity .6s ease; will-change: transform; }
+.wc img { display: block; width: 100%; height: auto; }
+.wc .tags { position: absolute; left: 5px; right: 5px; bottom: 5px; display: flex; flex-wrap: wrap; gap: 2px 9px; padding: 22px 8px 7px;
+  font-size: 11px; letter-spacing: .06em; color: #fff; background: linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0)); opacity: 0; transition: opacity .25s; pointer-events: none; }
+.wc:hover .tags, .wc.hit .tags { opacity: 1; }
+#gmenu { position: fixed; z-index: 230; min-width: 120px; padding: 4px; border-radius: 10px; background: rgba(28,32,31,.96); box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+#gmenu[hidden] { display: none; }
+/* 手指好按：光暈的點按範圍加大到約 46px */
+.orb::before { content: ""; position: absolute; inset: -12px; }
+/* 白色版：上方列蓋一層白，標籤列貼在它下面，卷動時不會和「‹ Gallery」疊在一起 */
+#gallery.white .gtop { background: linear-gradient(#fff 72%, rgba(255,255,255,0)); padding-bottom: 14px; }
+#wbar { top: calc(52px + env(safe-area-inset-top)); }
+@media (max-width: 700px) {
+  .gc { top: 51%; }
+  #gstage .gsub { display: none; }
+  .ghead { top: calc(60px + env(safe-area-inset-top)); }
+  #gcap { bottom: calc(20px + env(safe-area-inset-bottom)); padding: 0 14px; }
+  #wbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 0; }
+  #wbar::-webkit-scrollbar { display: none; }
+  #wbar button { flex: none; padding: 8px 13px; font-size: 16px; }
+  .whead .gsub { font-size: 11px; }
+}
+#gmenu button { display: block; width: 100%; text-align: left; padding: 9px 14px; border-radius: 7px; font-size: 14px; color: #ff8a7a; }
+#gmenu button:hover { background: rgba(255,255,255,.1); }
+#gview { position: absolute; inset: 0; z-index: 5; background: rgba(12,16,15,.95); display: none; flex-direction: column; }
+#gview.on { display: flex; }
+#gvStage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: calc(56px + env(safe-area-inset-top)) 12px 8px; }
+#gvStage img, #gvStage video { max-width: 100%; max-height: 100%; object-fit: contain; -webkit-touch-callout: default; user-select: auto; }
+.gvbar { display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap; padding: 6px 12px calc(14px + env(safe-area-inset-bottom)); }
+.gvbar button { padding: 8px 16px; border-radius: 999px; background: rgba(255,255,255,.14); color: #fff; font-size: 13px; }
+.gvbar button.on { background: #fff; color: var(--ink); }
+.gvbar .sep { width: 1px; height: 18px; background: rgba(255,255,255,.25); margin: 0 4px; }
+#gvClose { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 14px; width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(255,255,255,.14); color: #fff; font-size: 20px; z-index: 2; }
 </style>
 </head>
 <body>
@@ -234,6 +329,7 @@ button:disabled { opacity: .45; cursor: default; }
   <button id="demoBtn" class="link">Upload a photo</button>
   <input id="photoInput" type="file" accept="image/*" hidden>
   <button id="gearBtn" class="gear" aria-label="Settings">⚙</button>
+  <button id="entryOrb" class="orb" aria-label="Gallery" title="Gallery"></button>
 </section>
 
 <!-- 錯誤 -->
@@ -246,15 +342,25 @@ button:disabled { opacity: .45; cursor: default; }
 
 <!-- 鏡頭 -->
 <section id="lens" class="screen">
-  <video id="video" playsinline muted autoplay></video>
-  <img id="still" alt="">
-  <canvas id="surreal"></canvas>
-  <img id="result" alt="Reading version of this view">
-  <canvas id="glow"></canvas>
-  <canvas id="boxes"></canvas>
+  <!-- V9：照片層都放在 #stage 裡。直式照片比視窗高時 #scroller 變成可捲動（滑鼠滾輪／觸控），照片以寬度填滿、看得到完整一張 -->
+  <div id="scroller">
+    <div id="stage">
+      <video id="video" playsinline muted autoplay></video>
+      <img id="still" alt="">
+      <canvas id="surreal"></canvas>
+      <img id="result" alt="Reading version of this view">
+      <canvas id="glow"></canvas>
+      <canvas id="boxes"></canvas>
+      <!-- 幾乎透明的一層：右鍵「另存圖片」／手機長按存到的是「照片＋偵測框＋人形光＋標籤百分比」的分析圖，不是原圖 -->
+      <img id="analysis" alt="Analysis of this photo: detections and label percentages" draggable="false">
+    </div>
+  </div>
 
   <header class="topbar">
-    <div id="brand" class="brand" role="button" aria-label="Back to the first page" title="Back to the first page">‹ SurrealLens</div>
+    <div class="left">
+      <div id="brand" class="brand" role="button" aria-label="Back to the first page" title="Back to the first page">‹ SurrealLens</div>
+      <button id="galleryOrb" class="orb" aria-label="Gallery (coming soon)" title="Gallery (coming soon)"></button>
+    </div>
     <div class="right">
       <div id="badge" class="badge">Simulated</div>
       <button id="recBtn" class="gear" aria-label="Record a video" title="Record a video">●</button>
@@ -281,6 +387,38 @@ button:disabled { opacity: .45; cursor: default; }
     </div>
     <div id="labels" class="labels"></div>
   </section>
+</section>
+
+<!-- Gallery：存在這台裝置的歷史紀錄（上傳照片的結果、錄好的影片） -->
+<section id="gallery" aria-label="Gallery">
+  <div class="gtop"><div class="gl">
+    <div id="galleryBack" class="brand" role="button" aria-label="Close the gallery">‹ Gallery</div>
+    <button id="galleryMode" class="orb" aria-label="Switch between the dark and the white gallery" title="Dark gallery: your new works · White gallery: earlier works by label"></button>
+  </div></div>
+  <div id="gstage">
+    <div id="grail"></div>
+    <div class="ghead">
+      <h2 class="gtitle">Gallery</h2>
+      <p class="gsub">Pictures made from your uploaded photos, and the videos you record. Kept on this device only — your phone and your computer each keep their own.</p>
+    </div>
+    <div id="gcap"></div>
+    <p id="gempty" hidden>Nothing here yet. Upload a photo and tap Reading, or record a video, and it will appear here. It is kept on this device only.</p>
+  </div>
+  <!-- 白色 Gallery：舊作品（120 張），依十個標籤排序 -->
+  <div id="gwhite">
+    <div class="whead">
+      <h2 class="gtitle">Gallery</h2>
+      <p class="gsub">Earlier works, each read against the ten labels. Pick a word to bring the pictures that fit it forward; the rest gather behind.</p>
+    </div>
+    <div id="wbar"></div>
+    <div id="wcanvas"></div>
+  </div>
+  <div id="gmenu" hidden><button id="gmenuDel">Delete</button></div>
+  <div id="gview">
+    <button id="gvClose" aria-label="Close">×</button>
+    <div id="gvStage"></div>
+    <div class="gvbar" id="gvBar"></div>
+  </div>
 </section>
 
 <!-- 設定：Worker 連線 -->
@@ -653,7 +791,9 @@ const eyes = (() => {
   function layers(on) { glow.classList.toggle('on', on); boxes.classList.toggle('on', on); }
 
   function drawBoxes() {
-    const lens = $('lens'), cw = lens.clientWidth, ch = lens.clientHeight, dpr = Math.min(devicePixelRatio || 1, 2);
+    const lens = $('stage'), cw = lens.clientWidth, ch = lens.clientHeight;
+    if (!cw || !ch) return;
+    const dpr = Math.min(devicePixelRatio || 1, 2, 4096 / Math.max(cw, ch)); // 直式照片的舞台很高，畫布不要超過 4096 px
     if (boxes.width !== Math.round(cw * dpr) || boxes.height !== Math.round(ch * dpr)) {
       boxes.width = Math.round(cw * dpr); boxes.height = Math.round(ch * dpr);
     }
@@ -768,9 +908,17 @@ const eyes = (() => {
     try { localStorage.setItem('surreallens_v6_eyes', enabled ? '1' : '0'); } catch (e) {}
     if (enabled) load(); else layers(false);
   });
-  addEventListener('resize', () => { if (active()) drawBoxes(); });
+  // 視窗或舞台大小改變時由 layoutStage() 呼叫
+  const redraw = () => { if (active() && dets.length) drawBoxes(); };
 
   return {
+    redraw,
+    // 給存圖用：偵測框、生物輪廓遮罩、是否已算完（上傳的照片只算一次）
+    snapshot: () => ({
+      on: enabled && !failed,
+      done: !!source && source === still && doneFor === still.src,
+      dets, glow,
+    }),
     // 目前偵測到的生物輪廓（白色、有透明度），等待動畫用它讓人保持完整
     detections: () => dets,
     // 偵測模型已載入、而且沒被關掉：這時「沒偵測到人」才是真的沒有人，而不是不知道
@@ -927,6 +1075,7 @@ const clip = (() => {
 
   return {
     scoreImage,
+    doneFor: () => doneFor,
     start() { load(); if (!timer) timer = setInterval(tick, 900); },
     targets: () => (ready && !failed ? out : null),
     state: () => (failed ? 'failed' : ready ? 'ready' : 'loading'),
@@ -951,7 +1100,7 @@ function enterLens() {
   const from = document.querySelector('.screen.on');
   const flash = $('flash'), lens = $('lens');
   const fancy = from && from.id !== 'lens' && !matchMedia('(prefers-reduced-motion: reduce)').matches && flash.animate;
-  const finish = () => { show('lens'); setReality(); syncPanelHeight(); startAnalysis(); };
+  const finish = () => { show('lens'); resetAnalysis(); setReality(); layoutStage(); startAnalysis(); };
   if (!fancy) return finish();
   const opts = { fill: 'forwards', easing: 'cubic-bezier(.4,0,.2,1)' };
   from.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.22)' }], { duration: 420, ...opts });
@@ -1076,11 +1225,21 @@ function drawCover(ctx, src, sw, sh, w, h) {
   ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
 }
 
+// 目前視窗看得到的那一段，換算成 surreal 畫布的 y 範圍（沒有捲動時就是整張）
+function visibleBand(h) {
+  const sc = $('scroller'), st = $('stage');
+  if (!sc.classList.contains('scroll') || !st.clientHeight) return [0, h];
+  const k = h / st.clientHeight;
+  return [Math.max(0, sc.scrollTop * k), Math.min(h, (sc.scrollTop + sc.clientHeight) * k)];
+}
+
 function freezeFrame() {
   const [sw, sh] = sourceSize();
   // 用較低的解析度算動畫，手機比較不吃力
-  surreal.width = Math.min(720, Math.round(innerWidth * Math.min(window.devicePixelRatio || 1, 2)));
-  surreal.height = Math.round(surreal.width * innerHeight / innerWidth);
+  // V9：照片層放在 #stage 裡，直式照片時舞台比視窗高，所以用舞台的比例，不是視窗的
+  const stg = $('stage'), stW = stg.clientWidth || innerWidth, stH = stg.clientHeight || innerHeight;
+  surreal.width = Math.min(720, Math.round(stW * Math.min(window.devicePixelRatio || 1, 2)));
+  surreal.height = Math.round(surreal.width * stH / stW);
   drawCover(sctx, source, sw, sh, surreal.width, surreal.height);
   surreal.classList.add('on');
   $('badge').textContent = 'Painting…';
@@ -1101,21 +1260,34 @@ function unfreeze() {
 // 結果出現時：新圖由一條條橫線掃過來，像被風吹開。
 const wait = (() => {
   const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const STEP_MS = 140, MAX_BLOCKS = 9, REVEAL_MS = 900;
+  const STEP_MS = 140, MAX_BLOCKS = 44, REVEAL_MS = 900;
   let base = null, people = null, raf = 0, blocks = [], stopping = false, onSettled = null, token = 0;
 
   const make = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 
+  // V9：絲線更細更密。大多數是又扁又長的細條（2–15 px 高），錯位後被拉出的就是一條條細絲；
+  // 偶爾（約 1/8）才有舊的大方塊，讓節奏不要全是細線。細絲全部來自方塊錯位本身，沒有另外加的條。
   function newBlock(w, h) {
-    const sizes = [w * .04, w * .07, w * .11, w * .16];
-    const bw = Math.max(6, Math.round(sizes[Math.random() * 4 | 0] * (.8 + Math.random() * .8)));
-    const bh = Math.max(6, Math.round(bw * (.5 + Math.random() * 1.2)));
+    const chunky = Math.random() < .125;
     const dir = Math.random() < .5 ? -1 : 1;
+    let bw, bh, dx, dy;
+    if (chunky) {
+      const sizes = [w * .04, w * .07, w * .11, w * .16];
+      bw = Math.max(6, Math.round(sizes[Math.random() * 4 | 0] * (.8 + Math.random() * .8)));
+      bh = Math.max(6, Math.round(bw * (.5 + Math.random() * 1.2)));
+      dx = Math.round(dir * bw * (.6 + Math.random() * 2));
+      dy = Math.random() < .35 ? Math.round((Math.random() - .5) * bh) : 0;
+    } else {
+      bw = Math.round(w * (.08 + Math.random() * .34));
+      bh = Math.max(2, Math.round(1.5 + Math.random() * Math.random() * 14));
+      dx = Math.round(dir * bw * (.25 + Math.random() * 1.1));
+      dy = 0;
+    }
+    // 直式照片整張很高：只出現在目前看得到的那一段，不然大半在畫面外
+    const [y0, y1] = visibleBand(h);
     return {
-      x: Math.round(Math.random() * (w - bw)), y: Math.round(Math.random() * (h - bh)), w: bw, h: bh,
-      dx: Math.round(dir * bw * (.6 + Math.random() * 2)),
-      dy: Math.random() < .35 ? Math.round((Math.random() - .5) * bh) : 0,
-      life: 4 + (Math.random() * 7 | 0),
+      x: Math.round(Math.random() * (w - bw)), y: Math.round(y0 + Math.random() * Math.max(0, y1 - y0 - bh)), w: bw, h: bh, dx, dy,
+      life: 3 + (Math.random() * 6 | 0),
     };
   }
 
@@ -1129,7 +1301,7 @@ const wait = (() => {
   function step() {
     blocks = blocks.filter(b => --b.life > 0);
     if (!stopping) {
-      for (let n = 1 + (Math.random() * 2 | 0); n > 0 && blocks.length < MAX_BLOCKS; n--) blocks.push(newBlock(surreal.width, surreal.height));
+      for (let n = 3 + (Math.random() * 4 | 0); n > 0 && blocks.length < MAX_BLOCKS; n--) blocks.push(newBlock(surreal.width, surreal.height));
     } else if (!blocks.length) {
       render();
       const done = onSettled; cancel();
@@ -1281,6 +1453,7 @@ const rec = (() => {
     if (!keep || blob.size < 4000) return;
     savedBlob = blob;
     pill.hidden = false;
+    galleryAddVideo(blob);   // V9：錄好的影片自動存進 Gallery
   }
 
   // 結果出現（或失敗、沒有東西可畫）之後多錄一下再停
@@ -1780,13 +1953,18 @@ async function liveSend(frame, myRun) {
 function liveReveal(src, myRun, seq) {
   live.revealing = true; live.shown = seq;
   clearTimeout(live.animTimer);
-  result.onload = () => {
+  result.onload = async () => {
     result.onload = null;
     if (myRun !== live.run) return;                            // 中途切回 Reality 就不再顯示
+    // V9：等待動畫正在播的話，圖一到就立刻橫線掃出（不為了動畫多等；沒在播就直接顯示）
+    if (surreal.classList.contains('on')) {
+      const done = await wait.reveal(result);
+      if (!done || myRun !== live.run) return;                 // 掃到一半被切回 Reality
+    }
     result.classList.remove('on'); void result.offsetWidth; result.classList.add('on', 'instant');
     unfreeze();
     live.revealing = false; live.revealed = true;
-    if (live.single) { liveStop(); mode = 'result'; setButtons(); }   // 上傳照片：只畫這一張，停在結果上
+    if (live.single) { liveStop(); mode = 'result'; setButtons(); galleryAddPhoto(); }   // 上傳照片：只畫這一張，停在結果上，並存進 Gallery
     else { $('badge').classList.add('live'); $('badge').textContent = 'Live'; }
     rec.afterResult();                                         // 錄影中：結果圖出現後再錄 2 秒就結束
   };
@@ -1827,7 +2005,9 @@ function liveStart() {
   // 先只亮「Painting…」；超過 LIVE_ANIM_DELAY_MS 還沒有圖，才播 V6 的等待動畫（凍結、方塊錯位）
   $('badge').textContent = 'Painting…'; $('badge').classList.add('waiting');
   clearTimeout(live.animTimer);
-  live.animTimer = setTimeout(() => { if (live.on && !live.revealed && !live.revealing) freezeFrame(); }, LIVE_ANIM_DELAY_MS);
+  // V9：上傳的照片本來就等比較久（1024），一按下就直接開始等待動畫；相機維持原樣，超過 1.2 秒還沒圖才播
+  if (live.single) freezeFrame();
+  else live.animTimer = setTimeout(() => { if (live.on && !live.revealed && !live.revealing) freezeFrame(); }, LIVE_ANIM_DELAY_MS);
   clearTimeout(live.timer);
   live.endsAt = performance.now() + LIVE_WARMUP_MAX_S * 1000;
   live.timer = setTimeout(() => liveEnd('<div class="q">No picture came back in time.</div><small>The painter may still be waking up. Try again in a moment.</small>'), LIVE_WARMUP_MAX_S * 1000);
@@ -1875,13 +2055,532 @@ function goHome() {
   $('caption').classList.remove('on');
   video.srcObject = null;
   source = null; mode = 'real';
+  resetAnalysis();
   show('entry');
+  layoutStage();
 }
 $('brand').addEventListener('click', goHome);
 
 $('modeReal').addEventListener('click', () => { if (!busy) setReality(); });
 $('modeSurreal').addEventListener('click', goHeterotopia);
-addEventListener('resize', () => { syncPanelHeight(); });
+addEventListener('resize', () => { syncPanelHeight(); layoutStage(); });
+
+// ---------- V9：直式照片可捲動 ----------
+// 上傳的照片（還是 still）比視窗「更高」時：#stage 寬度填滿、高度依照片比例，#scroller 可以用滾輪／觸控往下看完整一張。
+// 照片不比視窗高（橫式、或手機上大致符合畫面）就維持原本的 cover 填滿，不捲動。相機永遠不捲動。
+function layoutStage() {
+  const sc = $('scroller'), st = $('stage');
+  const [sw, sh] = source === still ? sourceSize() : [0, 0];
+  if (!sw || !$('lens').classList.contains('on')) {
+    sc.classList.remove('scroll'); st.style.removeProperty('--stage-h'); sc.scrollTop = 0;
+  } else {
+    const tall = sc.offsetWidth * sh / sw > sc.clientHeight * 1.02;
+    sc.classList.toggle('scroll', tall);
+    if (tall) st.style.setProperty('--stage-h', Math.round(sc.clientWidth * sh / sw) + 'px'); // 有捲軸時 clientWidth 比較窄，所以出現捲軸後才量
+    else { st.style.removeProperty('--stage-h'); sc.scrollTop = 0; }
+  }
+  syncPanelHeight();
+  eyes.redraw();
+}
+// 滾輪在面板或上方列上時，也一起捲照片（它們疊在照片上面，本來會把滾輪吃掉）
+for (const el of [panel, document.querySelector('.topbar')]) {
+  el.addEventListener('wheel', e => {
+    const sc = $('scroller');
+    if (sc.classList.contains('scroll')) sc.scrollTop += e.deltaY;
+  }, { passive: true });
+}
+
+// ---------- V9：分析圖（右鍵／長按存下來的那張） ----------
+// 內容：完整照片（最長邊最多 2048）＋偵測框＋生物的白色輪廓光＋下方一條深色帶，列出十二個標籤的百分比。
+// 做好之後放進 #analysis（幾乎透明、蓋在照片上），瀏覽器的「另存圖片」／手機長按存的就是這張。
+const analysisImg = $('analysis');
+let analysisKey = null, analysisUrl = null, analysisBlobCur = null;
+
+function resetAnalysis() {
+  analysisKey = null; analysisBlobCur = null;
+  analysisImg.classList.remove('on');
+  analysisImg.removeAttribute('src');
+  if (analysisUrl) { URL.revokeObjectURL(analysisUrl); analysisUrl = null; }
+}
+
+function buildAnalysis() {
+  if (mode !== 'real' || source !== still || !still.naturalWidth || busy || live.on) return;
+  const snap = eyes.snapshot();
+  if (snap.on && !snap.done) return;                              // 偵測還沒算完：先不做，免得存到一半的圖
+  if (clip.doneFor() !== still.src && clip.state() !== 'failed') return; // 標籤還沒量完
+  const key = still.src + (snap.on ? '|eyes' : '|plain');
+  if (key === analysisKey) return;
+  analysisKey = key;
+
+  const t = clip.state() === 'failed' ? values.slice() : clip.targets();
+  if (!t) { analysisKey = null; return; }
+  const sw = still.naturalWidth, sh = still.naturalHeight, S = Math.min(1, 2048 / Math.max(sw, sh));
+  const W = Math.round(sw * S), H = Math.round(sh * S);
+  const FONT = '"Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,sans-serif';
+  const pad = Math.round(W * .035), rowH = Math.round(W * .056), stripH = pad + 4 * rowH + Math.round(pad * .6);
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H + stripH;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#14191a'; c.fillRect(0, 0, W, H + stripH);
+  c.drawImage(still, 0, 0, W, H);
+
+  if (snap.on) {
+    // 生物輪廓光（和畫面上一樣：近處小光暈 + 遠處大光暈）
+    if (snap.glow.width && snap.glow.height) {
+      c.save();
+      for (const [blur, a] of [[W * .014, .9], [W * .004, .9], [0, .9]]) {
+        c.shadowColor = 'rgba(255,255,255,.9)'; c.shadowBlur = blur; c.globalAlpha = a;
+        c.drawImage(snap.glow, 0, 0, W, H);
+      }
+      c.restore();
+    }
+    // 偵測框 + 小字
+    c.save();
+    c.lineWidth = Math.max(1, W * .0016);
+    c.font = Math.max(11, Math.round(W * .013)) + 'px ' + FONT;
+    for (const d of snap.dets) {
+      const x = d.box.originX * S, y = d.box.originY * S, w = d.box.width * S, h = d.box.height * S;
+      c.strokeStyle = 'rgba(255,255,255,.6)'; c.strokeRect(x, y, w, h);
+      c.fillStyle = 'rgba(255,255,255,.92)'; c.shadowColor = 'rgba(0,0,0,.6)'; c.shadowBlur = 3;
+      c.fillText(d.name, x + 4, y > 16 ? y - 5 : y + 15);
+    }
+    c.restore();
+  }
+
+  // 下方深色帶：十二個標籤（照標籤順序，3 欄 × 4 列），前三名加粗、用淡綠色
+  const order = LABELS.map((l, i) => ({ id: l.id, v: t[i] })).sort((a, b) => b.v - a.v);
+  const top3 = new Set(order.slice(0, 3).filter(x => Math.round(x.v * 100) >= 1).map(x => x.id));
+  const colW = (W - 2 * pad) / 3, gap = pad * .6, barW = colW - gap;
+  LABELS.forEach((l, i) => {
+    const col = i % 3, row = (i / 3) | 0, x = pad + col * colW, y = H + pad + row * rowH;
+    const pct = Math.round(t[i] * 100), top = top3.has(l.id);
+    c.textBaseline = 'alphabetic';
+    c.fillStyle = top ? '#fff' : 'rgba(255,255,255,.72)';
+    c.font = (top ? '600 ' : '400 ') + Math.round(W * .024) + 'px ' + FONT;
+    c.textAlign = 'left'; c.fillText(l.name, x, y + W * .024);
+    c.font = Math.round(W * .019) + 'px ' + FONT;
+    c.fillStyle = 'rgba(255,255,255,.6)'; c.fillText(l.en, x + W * .024 * 2.6, y + W * .024);
+    c.fillStyle = top ? '#fff' : 'rgba(255,255,255,.8)';
+    c.font = (top ? '600 ' : '400 ') + Math.round(W * .022) + 'px ' + FONT;
+    c.textAlign = 'right'; c.fillText(String(pct), x + barW, y + W * .024);
+    const by = y + W * .034, bh = Math.max(3, W * .005);
+    c.fillStyle = 'rgba(255,255,255,.2)'; c.fillRect(x, by, barW, bh);
+    c.fillStyle = top ? '#8fe6c2' : 'rgba(255,255,255,.85)'; c.fillRect(x, by, barW * pct / 100, bh);
+  });
+  c.textAlign = 'left';
+
+  cv.toBlob(blob => {
+    if (!blob || analysisKey !== key) return;                     // 做的期間已經換照片了
+    const old = analysisUrl;
+    analysisBlobCur = blob;
+    analysisUrl = URL.createObjectURL(blob);
+    analysisImg.src = analysisUrl;
+    analysisImg.classList.add('on');
+    if (old) URL.revokeObjectURL(old);
+  }, 'image/jpeg', .92);
+}
+setInterval(() => { try { buildAnalysis(); } catch (e) { console.warn('analysis image failed', e); } }, 600);
+
+// ---------- V9：Gallery（歷史紀錄） ----------
+// 存在這台裝置的瀏覽器裡（IndexedDB），手機和電腦各存各的，不會同步、也不上傳到任何地方。
+// 自動存兩種：① 上傳照片按 Reading 畫出的結果（連同原照片、分析圖）② 錄好的影片。相機即時畫面不存（那是連續的幾十張）。
+// 清單只放小縮圖；大張的圖和影片放在另一個倉庫，點開才讀，所以清單很快。
+const gallery = (() => {
+  const DB = 'surreallens_gallery';
+  let dbp = null, urls = [];
+  const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  function open() {
+    if (dbp) return dbp;
+    dbp = new Promise((res, rej) => {
+      const r = indexedDB.open(DB, 1);
+      r.onupgradeneeded = () => {
+        r.result.createObjectStore('items', { keyPath: 'id', autoIncrement: true });
+        r.result.createObjectStore('blobs', { keyPath: 'id' });
+      };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+      r.onblocked = () => rej(new Error('blocked'));
+    });
+    dbp.catch(() => { dbp = null; });
+    return dbp;
+  }
+  const done = tx => new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = tx.onabort = () => rej(tx.error); });
+
+  async function add(meta, blobs) {
+    const d = await open(), tx = d.transaction(['items', 'blobs'], 'readwrite');
+    const id = await req(tx.objectStore('items').add(meta));
+    tx.objectStore('blobs').put({ id, ...blobs });
+    await done(tx);
+    try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}  // 請瀏覽器別自動清掉
+    return id;
+  }
+  async function list() {
+    const d = await open();
+    const all = await req(d.transaction('items').objectStore('items').getAll());
+    return all.sort((a, b) => b.createdAt - a.createdAt);
+  }
+  async function blobsOf(id) { const d = await open(); return req(d.transaction('blobs').objectStore('blobs').get(id)); }
+  async function remove(id) {
+    const d = await open(), tx = d.transaction(['items', 'blobs'], 'readwrite');
+    tx.objectStore('items').delete(id); tx.objectStore('blobs').delete(id);
+    await done(tx);
+  }
+
+  // ---- 縮圖 ----
+  function thumbFrom(src, sw, sh) {
+    const s = Math.min(1, 480 / Math.max(sw, sh)), c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(sw * s)); c.height = Math.max(1, Math.round(sh * s));
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    return new Promise(res => { try { c.toBlob(b => res(b ? { blob: b, w: c.width, h: c.height } : null), 'image/jpeg', .8); } catch (e) { res(null); } });
+  }
+  async function blobImage(blob) {
+    const im = new Image(), u = URL.createObjectURL(blob);
+    im.src = u; try { await im.decode(); } finally { URL.revokeObjectURL(u); }
+    return im;
+  }
+
+  // ---- 存 ----
+  let savingPhotoRun = -1;
+  async function addPhoto() {
+    if (savingPhotoRun === live.run) return;    // 同一次只存一張
+    savingPhotoRun = live.run;
+    try {
+      if (!result.src || !still.naturalWidth) return;
+      const resBlob = await (await fetch(result.src)).blob();
+      const th = await thumbFrom(await blobImage(resBlob), result.naturalWidth || 512, result.naturalHeight || 512);
+      // 原照片縮到最長邊 1600 再存，不然手機原圖一張好幾 MB
+      const sw = still.naturalWidth, sh = still.naturalHeight, s = Math.min(1, 1600 / Math.max(sw, sh));
+      const oc = document.createElement('canvas'); oc.width = Math.round(sw * s); oc.height = Math.round(sh * s);
+      oc.getContext('2d').drawImage(still, 0, 0, oc.width, oc.height);
+      const orig = await new Promise(r => oc.toBlob(r, 'image/jpeg', .85));
+      await add({ kind: 'photo', createdAt: Date.now(), thumb: th && th.blob, ar: th ? th.w / th.h : 1 },
+                { result: resBlob, original: orig, analysis: analysisBlobCur || null });
+      toast('Saved to Gallery.', 2500);
+    } catch (e) {
+      console.warn('gallery save failed', e);
+      toast('Couldn’t save to the Gallery (storage may be full or blocked).', 5000);
+    }
+  }
+  async function addVideo(blob) {
+    try {
+      let th = null;
+      try {
+        const src = result.classList.contains('on') && result.naturalWidth ? result : (source === still && still.naturalWidth ? still : null);
+        if (src) th = await thumbFrom(src, src.naturalWidth, src.naturalHeight);
+      } catch (e) {}
+      await add({ kind: 'video', createdAt: Date.now(), thumb: th && th.blob, ar: th ? th.w / th.h : 9 / 16, mime: blob.type }, { video: blob });
+      toast('Video saved to Gallery.', 2500);
+    } catch (e) {
+      console.warn('gallery save failed', e);
+      toast('Couldn’t save the video to the Gallery.', 5000);
+    }
+  }
+
+  // ---- 弧形走廊 ----
+  // 由左到右：最舊 → 最新，打開時停在最新的一張。滾輪往下／往右拖 = 圖片往右移（看比較舊的）；往上／往左拖 = 往左移（比較新的）。
+  const root = $('gallery'), rail = $('grail'), stage = $('gstage');
+  const fmt = t => { const d = new Date(t), p = n => String(n).padStart(2, '0'); return `${d.getMonth() + 1}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const CW = 240, CH = 300;   // 卡片畫布（4:5）
+  let items = [], cards = [], pos = 0, target = 0, raf = 0, snapTimer = 0, dragged = false;
+  const clampPos = v => Math.max(0, Math.min(Math.max(0, items.length - 1), v));
+  const isSmall = () => innerWidth < 700;                       // 手機：卡片放大，中間那張占約六成寬
+  const isTouch = matchMedia('(hover: none)').matches;
+  const cardW = () => isSmall() ? Math.min(innerWidth * .6, 280) : Math.min(innerWidth * .36, 300);
+
+  // 畫一張卡：縮圖 cover 填滿 4:5，再用 2px 直條重畫，中間條比兩邊高一點（桶狀），上下緣就變成微微的弧
+  async function paintCard(c) {
+    if (c.drawn) return; c.drawn = true;
+    const tmp = document.createElement('canvas'); tmp.width = CW; tmp.height = CH;
+    const t = tmp.getContext('2d');
+    t.fillStyle = '#1b2220'; t.fillRect(0, 0, CW, CH);
+    let bmp = null;
+    if (c.it.thumb) { try { bmp = await createImageBitmap(c.it.thumb); } catch (e) { try { bmp = await blobImage(c.it.thumb); } catch (e2) {} } }
+    if (bmp) { const sw = bmp.width, sh = bmp.height, s = Math.max(CW / sw, CH / sh); t.drawImage(bmp, (CW - sw * s) / 2, (CH - sh * s) / 2, sw * s, sh * s); }
+    if (c.it.kind === 'video') {
+      t.fillStyle = 'rgba(20,20,22,.6)'; t.beginPath(); t.arc(CW / 2, CH / 2, 26, 0, 7); t.fill();
+      t.fillStyle = '#fff'; t.beginPath(); t.moveTo(CW / 2 - 8, CH / 2 - 13); t.lineTo(CW / 2 + 14, CH / 2); t.lineTo(CW / 2 - 8, CH / 2 + 13); t.fill();
+    }
+    const g = c.el.getContext('2d'), STRIP = 2;
+    g.clearRect(0, 0, CW, CH);
+    for (let x = 0; x < CW; x += STRIP) {
+      const u = (x + STRIP / 2) / CW * 2 - 1, h = CH * (.9 + .1 * (1 - u * u));
+      g.drawImage(tmp, x, 0, STRIP, CH, x, (CH - h) / 2, STRIP, h);
+    }
+    if (bmp && bmp.close) bmp.close();
+  }
+
+  function layout() {
+    const W = cardW();
+    rail.style.setProperty('--cw', W + 'px');
+    for (const c of cards) {
+      const d = c.i - pos, ad = Math.abs(d);
+      if (ad > 4.6) { if (c.vis) { c.el.style.display = 'none'; c.vis = false; } continue; }
+      if (!c.vis) { c.el.style.display = 'block'; c.vis = true; }
+      paintCard(c);
+      const x = d * W * .9, z = -Math.min(ad, 3) * W * .5;
+      const ry = Math.max(-64, Math.min(64, d * (isSmall() ? 34 : 40)));
+      const sc = .8 + .3 * Math.exp(-d * d * 1.3);          // 中間最大（約 1.1），兩側縮到 0.8 左右
+      c.el.style.transform = `translate(-50%,-50%) translate3d(${x.toFixed(1)}px,0,${z.toFixed(1)}px) rotateY(${ry.toFixed(1)}deg) scale(${sc.toFixed(3)})`;
+      c.el.style.zIndex = String(100 - Math.round(ad * 10));
+      c.el.style.opacity = String(Math.max(0, Math.min(1, 1.2 - ad * .26)).toFixed(2));
+      c.el.style.filter = ad < .4 ? 'none' : `brightness(${Math.max(.45, 1 - ad * .16).toFixed(2)})`;
+    }
+    const it = items[Math.round(pos)];
+    $('gcap').innerHTML = it ? `${it.kind === 'video' ? 'VIDEO' : 'PHOTO'} · ${fmt(it.createdAt)}<small>${Math.round(pos) + 1} / ${items.length} · ${isTouch ? 'swipe to move · tap the centre to open · press and hold to delete' : 'scroll to move · click the centre to open · right-click to delete'}</small>` : '';
+  }
+  function loop() {
+    raf = 0;
+    const diff = target - pos;
+    pos = Math.abs(diff) < .0008 ? target : pos + diff * .14;
+    layout();
+    if (pos !== target && root.classList.contains('on')) raf = requestAnimationFrame(loop);
+  }
+  const kick = () => { if (!raf && root.classList.contains('on')) raf = requestAnimationFrame(loop); };
+  const snapSoon = () => { clearTimeout(snapTimer); snapTimer = setTimeout(() => { target = clampPos(Math.round(target)); kick(); }, 140); };
+
+  async function render(keepIndex) {
+    rail.textContent = ''; cards = [];
+    let all = [];
+    try { all = await list(); } catch (e) { console.warn('gallery open failed', e); }
+    items = all.reverse();                                   // 最舊在左、最新在右
+    $('gempty').hidden = items.length > 0;
+    items.forEach((it, i) => {
+      const el = document.createElement('canvas'); el.width = CW; el.height = CH; el.className = 'gc';
+      const c = { it, i, el, drawn: false, vis: false };
+      el.addEventListener('click', () => {
+        if (dragged) return;
+        if (Math.round(pos) === i) view(it); else { target = i; kick(); }
+      });
+      el.addEventListener('contextmenu', e => { e.preventDefault(); showMenu(e.clientX, e.clientY, it); });
+      rail.appendChild(el); cards.push(c);
+    });
+    pos = target = clampPos(keepIndex == null ? items.length - 1 : keepIndex);
+    layout();
+  }
+  // 兩種 Gallery：dark = 今天起存下的新作品（弧形走廊）；white = 舊作品 120 張，依十個標籤排序。小光暈切換，記住上次的選擇。
+  let gmode = 'dark';
+  try { if (localStorage.getItem('surreallens_gallery_mode') === 'white') gmode = 'white'; } catch (e) {}
+  function setMode(m) {
+    gmode = m;
+    try { localStorage.setItem('surreallens_gallery_mode', m); } catch (e) {}
+    root.classList.toggle('white', m === 'white');
+    hideMenu(); closeView();
+    if (m === 'white') renderWhite(); else render();
+  }
+  function openGallery() { root.classList.add('on'); setMode(gmode); }
+  function closeGallery() { closeView(); hideMenu(); root.classList.remove('on'); }
+
+  // ---- 黑色：右鍵（手機長按）刪除 ----
+  let menuIt = null, pressTimer = 0;
+  function showMenu(x, y, it) {
+    menuIt = it; const m = $('gmenu'); m.hidden = false;
+    m.style.left = Math.max(6, Math.min(x, innerWidth - 140)) + 'px';
+    m.style.top = Math.max(6, Math.min(y, innerHeight - 56)) + 'px';
+  }
+  function hideMenu() { $('gmenu').hidden = true; menuIt = null; clearTimeout(pressTimer); }
+  $('gmenuDel').addEventListener('click', async () => {
+    const it = menuIt; hideMenu();
+    if (!it || !confirm('Delete this from the Gallery? This can’t be undone.')) return;
+    try { await remove(it.id); } catch (e) { toast('Could not delete it.', 3000); return; }
+    render(Math.max(0, Math.min(Math.round(pos), items.length - 2)));
+  });
+  addEventListener('pointerdown', e => { if (!$('gmenu').hidden && !e.target.closest('#gmenu')) hideMenu(); }, true);
+  // iOS 沒有右鍵事件：手指按住不動 0.65 秒，也跳出同一個選單
+  stage.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    const sx = e.clientX, sy = e.clientY;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      const el = document.elementFromPoint(sx, sy), c = el && el.closest && el.classList.contains('gc') ? cards.find(k => k.el === el) : null;
+      if (c) { dragged = true; showMenu(sx, sy, c.it); }
+    }, 650);
+  });
+  addEventListener('pointermove', e => { if (pressTimer && drag && Math.abs(e.clientX - drag.x) > 8) clearTimeout(pressTimer); });
+  addEventListener('pointerup', () => clearTimeout(pressTimer));
+
+  // ---- 白色：舊作品，依標籤排序 ----
+  // 資料：old_scores.json（每張圖對十個標籤的百分比，由我逐張看過後標的前三名；其餘為 0）。圖在 old1/、old2/。
+  // 不選標籤：全部沿斜線疊成一串。選了標籤：前三名裡有它的圖（依百分比高到低）排在最上面，排開、盡量不互相遮住；
+  // 其餘的縮小、重疊擠在下面和後面（疊到沒關係）。
+  let wdata = null, wsel = null, wcards = [];
+  async function loadWhite() {
+    if (wdata) return wdata;
+    try { wdata = await (await fetch('old_scores.json')).json(); } catch (e) { wdata = { labels: [], items: [] }; }
+    return wdata;
+  }
+  const top3Of = it => [...it.p.keys()].filter(i => it.p[i] > 0).sort((a, b) => it.p[b] - it.p[a]).slice(0, 3);
+  async function renderWhite() {
+    const d = await loadWhite();
+    const canvas = $('wcanvas'), bar = $('wbar');
+    if (!wcards.length) {
+      canvas.textContent = ''; bar.textContent = '';
+      if (!d.items.length) { canvas.innerHTML = '<p class="gsub" style="padding:24px clamp(18px,5vw,60px)">The earlier works could not be loaded here.</p>'; return; }
+      const mk = (label, k) => { const b = document.createElement('button'); b.textContent = label; b.dataset.k = k; b.addEventListener('click', () => selectLabel(wsel === k || k === 'all' ? null : +k)); bar.appendChild(b); };
+      mk('All', 'all'); d.labels.forEach((l, i) => mk(l.name, i));
+      d.items.forEach((it, i) => {
+        const el = document.createElement('div'); el.className = 'wc';
+        const tags = top3Of(it).map(k => `<span>${d.labels[k].name} ${it.p[k]}%</span>`).join('');
+        el.innerHTML = `<img alt="" src="${it.f}" decoding="async"${i > 30 ? ' loading="lazy"' : ''}><div class="tags">${tags}</div>`;
+        el.addEventListener('click', () => viewOld(it, d));
+        canvas.appendChild(el); wcards.push({ it, el });
+      });
+    }
+    syncBar(); layoutWhite();
+  }
+  function syncBar() {
+    $('wbar').querySelectorAll('button').forEach(b => {
+      const on = wsel == null ? b.dataset.k === 'all' : +b.dataset.k === wsel && b.dataset.k !== 'all';
+      b.classList.toggle('on', on);
+      if (on && $('wbar').scrollWidth > $('wbar').clientWidth) $('wbar').scrollTo({ left: b.offsetLeft - ($('wbar').clientWidth - b.offsetWidth) / 2, behavior: 'smooth' }); // 手機上標籤列可橫滑，選到的捲到中間
+    });
+  }
+  function selectLabel(k) { wsel = k; syncBar(); layoutWhite(); $('gwhite').scrollTo({ top: 0, behavior: 'smooth' }); }
+
+  function layoutWhite() {
+    const sc = $('gwhite'), Wc = sc.clientWidth, canvas = $('wcanvas');
+    if (!Wc || !wcards.length) return;
+    const pad = Math.max(16, Math.min(60, Wc * .05));
+    const small = Wc < 700;
+    // 卡片寬（含白邊）；圖是正方形。電腦用同一個大小；手機：沒選標籤時小一點（斜疊一串），選了標籤時剛好兩欄、大一點
+    const cwDesk = Math.round(Math.max(108, Math.min(220, Wc * .17)));
+    let cw = small ? Math.round(Wc * .32) : cwDesk;
+    const cwSel = small ? Math.floor((Wc - 2 * pad - 12) / 2) : cwDesk;
+    const place = (c, x, y, s, z, op, hit) => {
+      c.el.style.width = cw + 'px';
+      c.el.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px) scale(${s})`;
+      c.el.style.zIndex = String(z); c.el.style.opacity = String(op); c.el.classList.toggle('hit', !!hit);
+    };
+    let bottom = 0;
+    if (wsel == null) {
+      // 沒選標籤：全部沿斜線往右下疊，到右邊就回左邊再來一串（像參考圖的一長串斜疊）
+      const stepX = cw * .46, stepY = cw * .24, span = Math.max(stepX, Wc - 2 * pad - cw), per = Math.max(1, Math.floor(span / stepX));
+      wcards.forEach((c, k) => {
+        const sweep = Math.floor(k / per), i = k % per;
+        const x = pad + i * (span / Math.max(1, per - 1)) * (per > 1 ? 1 : 0), y = 16 + sweep * (per * stepY + cw * .35) + i * stepY;
+        place(c, x, y, 1, 10 + k, 1, false); bottom = Math.max(bottom, y + cw);
+      });
+    } else {
+      const lab = wsel;
+      cw = cwSel;
+      const hit =wcards.filter(c => top3Of(c.it).includes(lab)).sort((a, b) => b.it.p[lab] - a.it.p[lab]);
+      const rest = wcards.filter(c => !hit.includes(c)).sort((a, b) => a.it.f.localeCompare(b.it.f));
+      // 符合的：排開（左右只重疊一點點，一列一高一低錯開），百分比高的在最前面、最上面
+      const gap = small ? cw + 12 : cw * .96, cols = Math.max(1, Math.floor((Wc - 2 * pad + (gap - cw)) / gap)), rowH = cw * 1.24;
+      hit.forEach((c, k) => {
+        const col = k % cols, row = Math.floor(k / cols);
+        const x = pad + col * gap + (cols > 1 ? (Wc - 2 * pad - ((cols - 1) * gap + cw)) / 2 : 0), y = 16 + row * rowH + (col % 2) * cw * .16;
+        place(c, x, y, 1, 1000 - k, 1, true); bottom = Math.max(bottom, y + cw);
+      });
+      // 不符合的：縮小、擠成一疊在下面（互相重疊、在後面）
+      const s = .74, w2 = cw * s, stepX = w2 * .2, stepY = w2 * .3, per = Math.max(1, Math.floor((Wc - 2 * pad - w2) / stepX));
+      const y0 = (hit.length ? bottom + 44 : 16);
+      rest.forEach((c, k) => {
+        const row = Math.floor(k / per), i = k % per;
+        const x = pad + i * stepX, y = y0 + row * stepY * 1.6 + (i % 3) * stepY * .4;
+        place(c, x, y, s, 2 + k % 40, .78, false); bottom = Math.max(bottom, y + w2);
+      });
+    }
+    canvas.style.height = Math.round(bottom + 70) + 'px';
+  }
+  addEventListener('resize', () => { if (root.classList.contains('on') && gmode === 'white') layoutWhite(); });
+  $('galleryMode').addEventListener('click', () => setMode(gmode === 'dark' ? 'white' : 'dark'));
+
+  function viewOld(it, d) {
+    closeView();
+    const bar = $('gvBar'); bar.textContent = '';
+    $('gvStage').innerHTML = `<img alt="" src="${it.f}">`;
+    const cap = document.createElement('div');
+    cap.style.cssText = 'color:#fff;font-size:14px;letter-spacing:.08em;margin-right:8px';
+    cap.textContent = top3Of(it).map(k => `${d.labels[k].name} ${it.p[k]}%`).join('  ·  ');
+    const save = document.createElement('a');
+    save.textContent = 'Save'; save.href = it.f; save.download = it.f.split('/')[1];
+    save.style.cssText = 'padding:8px 16px;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;font-size:13px;text-decoration:none';
+    bar.append(cap, save);
+    $('gview').classList.add('on');
+  }
+
+  // 滾輪（觸控板橫滑也可以）：往下 = 圖片往右移
+  stage.addEventListener('wheel', e => {
+    if ($('gview').classList.contains('on')) return;
+    e.preventDefault();
+    const k = e.deltaMode === 1 ? 30 : 1;
+    const v = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? -e.deltaY * k : e.deltaX * k;
+    target = clampPos(target + v * .004);
+    kick(); snapSoon();
+  }, { passive: false });
+  // 滑鼠／手指左右拖
+  let drag = null;
+  stage.addEventListener('pointerdown', e => { if (e.button > 0) return; drag = { x: e.clientX, t: target }; dragged = false; });
+  addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 6) dragged = true;
+    if (dragged) { target = clampPos(drag.t - dx / (cardW() * .8)); kick(); }
+  });
+  addEventListener('pointerup', () => { if (!drag) return; drag = null; if (dragged) snapSoon(); setTimeout(() => { dragged = false; }, 0); });
+  addEventListener('keydown', e => {
+    if (!root.classList.contains('on') || $('gview').classList.contains('on')) return;
+    if (e.key === 'ArrowLeft') { target = clampPos(Math.round(target) - 1); kick(); }
+    else if (e.key === 'ArrowRight') { target = clampPos(Math.round(target) + 1); kick(); }
+    else if (e.key === 'Enter' && items[Math.round(pos)]) view(items[Math.round(pos)]);
+  });
+  addEventListener('resize', () => { if (root.classList.contains('on')) layout(); });
+
+
+  // ---- 檢視 ----
+  let viewUrls = [], cur = null;
+  function closeView() {
+    $('gview').classList.remove('on');
+    $('gvStage').textContent = '';
+    viewUrls.forEach(u => URL.revokeObjectURL(u)); viewUrls = []; cur = null;
+  }
+  async function view(it) {
+    const bl = await blobsOf(it.id);
+    if (!bl) return toast('This item could not be read.', 3000);
+    cur = { it, bl, tab: null };
+    const bar = $('gvBar'); bar.textContent = '';
+    const tabs = it.kind === 'video'
+      ? [['video', 'Video']]
+      : [['result', 'Reading'], ['original', 'Photo'], ['analysis', 'Analysis']].filter(([k]) => bl[k]);
+    const show = key => {
+      cur.tab = key;
+      const blob = bl[key], u = URL.createObjectURL(blob); viewUrls.push(u);
+      $('gvStage').innerHTML = key === 'video' ? `<video src="${u}" controls playsinline autoplay loop></video>` : `<img alt="" src="${u}">`;
+      bar.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('on', x.dataset.tab === key));
+    };
+    if (tabs.length > 1) tabs.forEach(([k, label]) => {
+      const x = document.createElement('button'); x.textContent = label; x.dataset.tab = k; x.addEventListener('click', () => show(k)); bar.appendChild(x);
+    });
+    if (tabs.length > 1) { const s = document.createElement('span'); s.className = 'sep'; bar.appendChild(s); }
+    const save = document.createElement('button'); save.textContent = 'Save';
+    save.addEventListener('click', () => {
+      const blob = cur.bl[cur.tab], ext = (blob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg').split(';')[0];
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = `surreallens-${cur.it.kind}-${cur.tab}-${cur.it.createdAt}.${ext}`;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    });
+    const del = document.createElement('button'); del.textContent = 'Delete';
+    del.addEventListener('click', async () => {
+      if (!confirm('Delete this from the Gallery? This can’t be undone.')) return;
+      try { await remove(cur.it.id); } catch (e) { toast('Could not delete it.', 3000); return; }
+      closeView(); render();
+    });
+    bar.append(save, del);
+    $('gview').classList.add('on');
+    show(tabs[0][0]);
+  }
+  $('gvClose').addEventListener('click', closeView);
+  $('galleryBack').addEventListener('click', closeGallery);
+  addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !root.classList.contains('on')) return;
+    if ($('gview').classList.contains('on')) closeView(); else closeGallery();
+  });
+  $('galleryOrb').addEventListener('click', openGallery);
+  $('entryOrb').addEventListener('click', openGallery);
+
+  return { addPhoto, addVideo, open: openGallery };
+})();
+function galleryAddPhoto() { gallery.addPhoto(); }
+function galleryAddVideo(blob) { gallery.addVideo(blob); }
 </script>
 </body>
 </html>
