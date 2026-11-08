@@ -187,7 +187,7 @@ button:disabled { opacity: .45; cursor: default; }
 .row.top .name, .row.top .pct { opacity: 1; font-weight: 600; }
 .row.used .fill { background: #8fe6c2; }
 
-/* 展開十二個小條：字小一點、行距緊一點，背景的漸層加深一點才讀得到 */
+/* 展開十個小條：字小一點、行距緊一點，背景的漸層加深一點才讀得到 */
 .panel.open { background: linear-gradient(to top, rgba(18,26,23,.66), rgba(18,26,23,.34) 72%, rgba(18,26,23,0)); }
 .panel.open .labels { gap: 0 14px; }
 .panel.open .row { padding: 1px 0; }
@@ -416,7 +416,6 @@ button:disabled { opacity: .45; cursor: default; }
   <!-- 白色 Gallery：舊作品（120 張），單螢幕空間式畫廊，依十個散布的標籤分數分前景／背景 -->
   <div id="gwhite">
     <div class="whead">
-      <h2 class="gtitle">Gallery</h2>
     </div>
     <div id="wlabels"></div>
     <div id="wcanvas"></div>
@@ -450,7 +449,7 @@ button:disabled { opacity: .45; cursor: default; }
 </section>
 
 <script>
-// ---------- 十二標籤（見 綠美圖_十二標籤.md） ----------
+// ---------- 十標籤（見 綠美圖_十個標籤_轉變與活動.md） ----------
 // g 是推導時的身分（綠／美／圖），介面不顯示，留給之後分析用。
 // cue / low 給 Gemini 判讀濃度；op 是超現實畫法，給生成用。
 const LABELS = [
@@ -489,11 +488,6 @@ const LABELS = [
     cue: 'in an ordinary museum only the art is looked at; here seats, lamps, stairs and the building itself are photographed as artworks. Look for close-ups of furniture or building parts as the subject, with no actual artwork',
     low: 'a real artwork as subject, or a wide view',
     op: 'scale shift: the soft cloud-shaped seats and fixtures swell into monumental sculptures several storeys tall, and people climb them like ants' },
-  { id: 'kuangwai', name: '框外', en: 'Framed Outside', g: '美',
-    q: 'Is a park framed by an opening still a park?', zh: '被開口框起來的公園，還算是公園嗎？',
-    cue: 'an ordinary museum frames paintings; here openings, oval voids and mesh frame the park and city outside. Look for a strong frame edge with a bright outdoor view inside it',
-    low: 'no framing',
-    op: 'the openings crop sky and park into flat planes of pure colour hanging in the air like paintings, impossible to tell from the real sky' },
   { id: 'fangsheng', name: '放聲', en: 'Released Sound', g: '圖',
     q: 'When the market noise rises upstairs, what is left of the library?', zh: '市集的聲音傳上樓之後，圖書館還剩下什麼？',
     cue: 'an ordinary library demands silence; here markets, talks and concerts fill the ground floor and their sound rises through the atrium. Look for crowds, stages, speakers, instruments, stalls',
@@ -504,11 +498,6 @@ const LABELS = [
     cue: 'an ordinary library has rows of desks; here soft cloud-like seats and window counters keep people sitting, lying, lingering. Look for soft seating with people on it (empty soft seats count as medium)',
     low: 'no seating',
     op: 'the seats sag and swell like soft elastic sacks, slowly enveloping the people sitting in them' },
-  { id: 'zhandu', name: '展讀', en: 'Read as Exhibit', g: '圖',
-    q: 'Does anyone still read a book placed on a display stand?', zh: '放上展台的書，還有人讀嗎？',
-    cue: 'in an ordinary library books are for reading; here books sit on glass display stands like artworks. Look for books on display stands or glass tables, books and exhibits in one view',
-    low: 'ordinary shelves or no books',
-    op: 'giant scrolls hang down the atrium covered in characters that look like writing but cannot be read; people can only look up at them, never read them' },
   { id: 'sanjia', name: '散架', en: 'Scattered Shelves', g: '圖',
     q: 'When shelves are no longer taller than you, how do you find a book?', zh: '書架不再比人高之後，人要怎麼找到書？',
     cue: 'an ordinary library has rows of shelves taller than people; here shelves are low, curved and scattered like islands. Look for low, curved, island-like shelves you can see over',
@@ -678,7 +667,7 @@ for (const l of LABELS) {
 function syncPanelHeight() {
   document.documentElement.style.setProperty('--panel-h', panel.offsetHeight + 'px');
 }
-// 面板兩種狀態：default（三個標籤）⇄ open（十二個小條）。沒有「只剩按鈕」這一種。
+// 面板兩種狀態：default（三個標籤）⇄ open（十個小條）。沒有「只剩按鈕」這一種。
 let panelState = 'default';
 const PANEL_STATES = ['default', 'open'];
 function setPanelState(s) {
@@ -687,9 +676,9 @@ function setPanelState(s) {
   render(usedNow);
   syncPanelHeight();
 }
-// 點把手：三個 ⇄ 十二個
+// 點把手：三個 ⇄ 十個
 $('handle').addEventListener('click', () => setPanelState(panelState === 'default' ? 'open' : 'default'));
-// 在面板上往上滑 = 十二個，往下滑 = 三個
+// 在面板上往上滑 = 十個，往下滑 = 三個
 let swipeY = null;
 panel.addEventListener('touchstart', e => { swipeY = e.touches[0].clientY; }, { passive: true });
 panel.addEventListener('touchend', e => {
@@ -940,11 +929,11 @@ const eyes = (() => {
 })();
 
 // ---------- 即時判讀（CLIP：手機上的小型看圖 AI，不呼叫 API） ----------
-// 十二個標籤的文字描述已事先轉成向量，存在 clip_text.json（手機不用下載文字模型）。
+// 十個標籤的文字描述已事先轉成向量，存在 clip_text.json（手機不用下載文字模型）。
 // 手機只下載看圖的那一半，把畫面轉成向量，和每個標籤「像」與「不像」的描述比較：
 // 越像描述，濃度越高；再乘上「這看起來像不像綠美圖那種建築」，所以餐廳、桌面、手都會偏低。
 // 校正值：用 333 張照片（原本的 120 張 + fb / ins / th 資料夾裡 213 張不重複的）算出每個標籤的平均 mu 與標準差 sd
-const CAL = {"chuantang":{"mu":0.83,"sd":1.502},"jietian":{"mu":0.739,"sd":1.348},"shawang":{"mu":2.014,"sd":1.612},"raoyou":{"mu":0.64,"sd":1.575},"zhanren":{"mu":0.957,"sd":1.554},"shaiguang":{"mu":1.757,"sd":1.519},"zizhan":{"mu":-0.068,"sd":2.088},"kuangwai":{"mu":0.329,"sd":1.321},"fangsheng":{"mu":-0.932,"sd":1.912},"liuren":{"mu":-1.443,"sd":1.187},"zhandu":{"mu":1.098,"sd":1.298},"sanjia":{"mu":-0.27,"sd":1.17}};
+const CAL = {"chuantang":{"mu":0.83,"sd":1.502},"jietian":{"mu":0.739,"sd":1.348},"shawang":{"mu":2.014,"sd":1.612},"raoyou":{"mu":0.64,"sd":1.575},"zhanren":{"mu":0.957,"sd":1.554},"shaiguang":{"mu":1.757,"sd":1.519},"zizhan":{"mu":-0.068,"sd":2.088},"fangsheng":{"mu":-0.932,"sd":1.912},"liuren":{"mu":-1.443,"sd":1.187},"sanjia":{"mu":-0.27,"sd":1.17}};
 const clip = (() => {
   const TF = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2';
   const MODEL = 'Xenova/clip-vit-base-patch32';
@@ -1168,10 +1157,8 @@ function heuristics(f) {
     zhanren:   c(f.contrast * 1.6),
     shaiguang: c(f.contrast * 3.5 * f.mean),
     zizhan:    c((1 - f.edges * 4) * 0.8),
-    kuangwai:  c((f.top - f.mean) * 3 + 0.3),
     fangsheng: c(f.sat * 1.4),
     liuren:    c((1 - f.contrast * 2) * 0.7),
-    zhandu:    c(f.sat * 0.8 + f.edges * 1.5),
     sanjia:    c(f.edges * 5 * f.sat),
   };
 }
@@ -1197,7 +1184,7 @@ function analyse() {
 
 let usedNow = [];
 function render(usedIds) {
-  // 預設只顯示目前最高的三個（而且要有一點濃度）；往上滑或點把手，展開成十二個小條。
+  // 預設只顯示目前最高的三個（而且要有一點濃度）；往上滑或點把手，展開成十個小條。
   // 左右順序固定照標籤順序，數字起伏時不會互相換位。送去畫圖的永遠只有被選上的前幾名，跟顯示幾個無關。
   usedNow = usedIds || [];
   const all = panelState === 'open';
@@ -1644,11 +1631,6 @@ const DREAMS = {
     { w: 'peopleNoChair', t: 'a lamp treated as a masterpiece, people photographing it from every side' },
     { w: 'any', d: true, t: 'the whole scene treated as a single artwork that cannot be carried away' },
   ],
-  kuangwai: [
-    { w: 'any', d: true, t: 'a piece of sky cut out and hung in the air like a painting, impossible to tell from the real sky' },
-    { w: 'plant', t: 'a stretch of green cropped into a flat picture, hanging in the open air' },
-    { w: 'people', t: 'people seen as if framed, standing inside a painting of themselves' },
-  ],
   fangsheng: [
     { w: 'three+', t: 'sound frozen mid-air, a silent burst of light and smoke hanging above the crowd' },
     { w: 'two-', t: 'a hush so deep that every footstep leaves a visible ripple in the air' },
@@ -1658,11 +1640,6 @@ const DREAMS = {
     { w: 'chair', d: true, t: 'soft heavy objects slowly sinking and holding the people who rest in them' },
     { w: 'chairEmpty', t: 'time left behind as warmth where people have just been' },
     { w: 'people', t: 'people who rested long ago and have become part of the view' },
-  ],
-  zhandu: [
-    { w: 'any', d: true, t: 'unreadable pages rising from the ground like leaves in a gust, people turning their heads to follow them' },
-    { w: 'people', t: 'scrolls of unreadable script flying through the air like flocks of birds, people reaching up toward pages they cannot read' },
-    { w: 'book', t: 'a book opened toward a camera instead of a reader, its words left unread' },
   ],
   sanjia: [
     { w: 'chair', t: 'everyday objects scattered across the ground like islands, their order come loose' },
@@ -2101,13 +2078,22 @@ for (const el of [panel, document.querySelector('.topbar')]) {
 }
 
 // ---------- V9：分析圖（右鍵／長按存下來的那張） ----------
-// 內容：完整照片（最長邊最多 2048）＋偵測框＋生物的白色輪廓光＋下方一條深色帶，列出十二個標籤的百分比。
+// 內容：完整照片（最長邊最多 2048）＋偵測框＋生物的白色輪廓光＋下方一條深色帶，列出十個標籤的百分比。
 // 做好之後放進 #analysis（幾乎透明、蓋在照片上），瀏覽器的「另存圖片」／手機長按存的就是這張。
 const analysisImg = $('analysis');
-let analysisKey = null, analysisUrl = null, analysisBlobCur = null;
+let analysisKey = null, analysisUrl = null, analysisBlobCur = null, analysisScoresCur = null;
+// 白 Gallery 用的十個標籤（沒有 框外、展讀），順序和 old_scores.json 一致
+const WHITE_IDS = LABELS.map(l => l.id);   // 現在生成圖用的標籤就是這十個，和 old_scores.json 同順序
+// 十個 0~1 的分數 → 十個整數百分比：只留前三名（至少 1%），其餘 0，和舊作品的格式一樣
+function whiteScores(t) {
+  if (!t) return WHITE_IDS.map(() => 0);
+  const v = WHITE_IDS.map(id => Math.round((t[LABELS.findIndex(l => l.id === id)] || 0) * 100));
+  const keep = new Set([...v.keys()].sort((a, b) => v[b] - v[a]).slice(0, 3).filter(i => v[i] >= 1));
+  return v.map((x, i) => keep.has(i) ? Math.min(100, x) : 0);
+}
 
 function resetAnalysis() {
-  analysisKey = null; analysisBlobCur = null;
+  analysisKey = null; analysisBlobCur = null; analysisScoresCur = null;
   analysisImg.classList.remove('on');
   analysisImg.removeAttribute('src');
   if (analysisUrl) { URL.revokeObjectURL(analysisUrl); analysisUrl = null; }
@@ -2124,6 +2110,7 @@ function buildAnalysis() {
 
   const t = clip.state() === 'failed' ? values.slice() : clip.targets();
   if (!t) { analysisKey = null; return; }
+  analysisScoresCur = whiteScores(t);
   const sw = still.naturalWidth, sh = still.naturalHeight, S = Math.min(1, 2048 / Math.max(sw, sh));
   const W = Math.round(sw * S), H = Math.round(sh * S);
   const FONT = '"Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,sans-serif';
@@ -2156,7 +2143,7 @@ function buildAnalysis() {
     c.restore();
   }
 
-  // 下方深色帶：十二個標籤（照標籤順序，3 欄 × 4 列），前三名加粗、用淡綠色
+  // 下方深色帶：十個標籤（照標籤順序，3 欄 × 4 列），前三名加粗、用淡綠色
   const order = LABELS.map((l, i) => ({ id: l.id, v: t[i] })).sort((a, b) => b.v - a.v);
   const top3 = new Set(order.slice(0, 3).filter(x => Math.round(x.v * 100) >= 1).map(x => x.id));
   const colW = (W - 2 * pad) / 3, gap = pad * .6, barW = colW - gap;
@@ -2260,14 +2247,14 @@ const gallery = (() => {
     if (bl.result) await put('result', bl.result);
     if (bl.original) await put('original', bl.original);
     if (bl.analysis) await put('analysis', bl.analysis);
-    await cloud('/' + it.uid, { method: 'PUT', body: JSON.stringify({ createdAt: it.createdAt, ar: it.ar || 1, o: !!bl.original, a: !!bl.analysis }) });
+    await cloud('/' + it.uid, { method: 'PUT', body: JSON.stringify({ createdAt: it.createdAt, ar: it.ar || 1, o: !!bl.original, a: !!bl.analysis, p: it.p || null }) });
     it.synced = true; it.syncedAt = Date.now(); await putItem(it);
   }
   async function pullItem(c) {
     const get = async part => { try { return await (await cloud('/' + c.id + '/' + part)).blob(); } catch (e) { return null; } };
     const [thumb, result, original, analysis] = await Promise.all([get('thumb'), get('result'), c.o ? get('original') : null, c.a ? get('analysis') : null]);
     if (!result) return false;
-    await add({ kind: 'photo', uid: c.id, createdAt: c.createdAt, ar: c.ar || 1, thumb: thumb || null, synced: true, syncedAt: Date.now() }, { result, original, analysis });
+    await add({ kind: 'photo', uid: c.id, createdAt: c.createdAt, ar: c.ar || 1, p: Array.isArray(c.p) ? c.p : undefined, thumb: thumb || null, synced: true, syncedAt: Date.now() }, { result, original, analysis });
     return true;
   }
   let syncing = false, syncAgain = false;
@@ -2304,7 +2291,7 @@ const gallery = (() => {
       }
     } catch (e) { console.warn('gallery sync skipped', e && e.message); }
     finally { syncing = false; }
-    if (changed && root.classList.contains('on') && gmode === 'dark') rerenderKeep();
+    if (changed && root.classList.contains('on')) { if (gmode === 'dark') rerenderKeep(); else renderWhite(); }
     if (syncAgain) { syncAgain = false; sync(); }
   }
   // 刪除：本機先刪；雲端能刪就刪，連不上就記在待刪清單，下次同步再送
@@ -2343,7 +2330,8 @@ const gallery = (() => {
       const oc = document.createElement('canvas'); oc.width = Math.round(sw * s); oc.height = Math.round(sh * s);
       oc.getContext('2d').drawImage(still, 0, 0, oc.width, oc.height);
       const orig = await new Promise(r => oc.toBlob(r, 'image/jpeg', .85));
-      await add({ kind: 'photo', uid: newUid(), createdAt: Date.now(), thumb: th && th.blob, ar: th ? th.w / th.h : 1 },
+      const p = analysisScoresCur || whiteScores(clip.targets() || values);
+      await add({ kind: 'photo', uid: newUid(), createdAt: Date.now(), thumb: th && th.blob, ar: th ? th.w / th.h : 1, p },
                 { result: resBlob, original: orig, analysis: analysisBlobCur || null });
       toast('Saved to Gallery.', 2500);
       sync();   // 背景上傳到雲端（有設定通行碼才會做）
@@ -2500,7 +2488,7 @@ const gallery = (() => {
   // 資料：old_scores.json（每張圖對十個標籤的百分比，由我逐張看過後標的前三名；其餘為 0）。圖在 old1/、old2/。
   // 版面用低差異序列（Halton）＋固定雜湊做出穩定、可重現、但看起來自由散落的構圖——不是 Math.random()：
   // 同一個視窗尺寸、同一個標籤，每次重畫位置都一樣；換標籤或換視窗尺寸才會跟著變，並以過渡動畫平滑移動過去。
-  let wdata = null, wsel = null, wcards = [], wlabelEls = [];
+  let wdata = null, wsel = null, wcards = [], wlabelEls = [], wsig = null, wurls = [];
   async function loadWhite() {
     if (wdata) return wdata;
     try { wdata = await (await fetch('old_scores.json')).json(); } catch (e) { wdata = { labels: [], items: [] }; }
@@ -2525,9 +2513,26 @@ const gallery = (() => {
   async function renderWhite() {
     const d = await loadWhite();
     const canvas = $('wcanvas'), labelsHost = $('wlabels');
+    // 新作品（黑 Gallery 裡的照片，用生成圖）：每次打開都重建，才會包含剛存的、剛同步來的、剛刪掉的
+    let fresh = [];
+    try { fresh = (await list()).filter(x => x.kind === 'photo'); } catch (e) {}
+    const noP = WHITE_IDS.map(() => 0);   // 舊的、沒有分數的照片：不符合任何標籤，放在背景
+    const sig = fresh.map(x => x.id + ':' + (x.p || noP).join(',')).join('|');
+    if (sig !== wsig) {                   // 只有新作品有增減／分數變了才重建，否則保留現有版面
+      wsig = sig; wcards = [];
+      wurls.forEach(u => URL.revokeObjectURL(u)); wurls = [];
+    }
     if (!wcards.length) {
+      const freshCards = [];
+      for (const x of fresh) {
+        let blob = x.thumb;
+        if (!blob) { try { const bl = await blobsOf(x.id); blob = bl && bl.result; } catch (e) {} }
+        if (!blob) continue;
+        const u = URL.createObjectURL(blob); wurls.push(u);
+        freshCards.push({ f: u, p: Array.isArray(x.p) && x.p.length === 10 ? x.p : noP, item: x });
+      }
       canvas.textContent = ''; labelsHost.textContent = ''; wlabelEls = [];
-      if (!d.items.length) { canvas.innerHTML = '<p class="gsub" style="padding:24px clamp(18px,5vw,60px)">The earlier works could not be loaded here.</p>'; return; }
+      if (!freshCards.length && !d.items.length) { canvas.innerHTML = '<p class="gsub" style="padding:24px clamp(18px,5vw,60px)">The earlier works could not be loaded here.</p>'; return; }
       const mkLabel = (text, k, pos) => {
         const b = document.createElement('button'); b.className = 'wlabel'; b.textContent = text; b.dataset.k = k;
         b.addEventListener('click', () => selectLabel(k === 'all' ? null : (wsel === +k ? null : +k)));
@@ -2535,11 +2540,11 @@ const gallery = (() => {
       };
       mkLabel('All', 'all', ALL_POS);
       d.labels.forEach((l, i) => mkLabel(l.name, i, LABEL_POS[i] || { x: .5, y: .5 }));
-      d.items.forEach((it, i) => {
+      [...freshCards, ...d.items].forEach((it, i) => {
         const el = document.createElement('div'); el.className = 'wc';
         const tags = top3Of(it).map(k => `<span>${d.labels[k].name} ${it.p[k]}%</span>`).join('');
         el.innerHTML = `<img alt="" src="${it.f}" decoding="async"${i > 30 ? ' loading="lazy"' : ''}><div class="tags">${tags}</div>`;
-        el.addEventListener('click', () => viewOld(it, d));
+        el.addEventListener('click', () => it.item ? view(it.item) : viewOld(it, d));
         canvas.appendChild(el); wcards.push({ it, el });
       });
     }
@@ -2733,7 +2738,7 @@ const gallery = (() => {
     del.addEventListener('click', async () => {
       if (!confirm('Delete this from the Gallery? This can’t be undone.')) return;
       try { await deleteItem(cur.it); } catch (e) { toast('Could not delete it.', 3000); return; }
-      closeView(); render();
+      closeView(); if (gmode === 'white') renderWhite(); else render();
     });
     bar.append(save, del);
     $('gview').classList.add('on');
