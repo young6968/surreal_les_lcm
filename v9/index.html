@@ -250,6 +250,7 @@ button:disabled { opacity: .45; cursor: default; }
 #gstage { position: absolute; inset: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
   background: radial-gradient(ellipse at 50% 55%, #161b1d 0, #000 72%); }
 #grail { position: absolute; inset: 0; perspective: 1000px; perspective-origin: 50% 46%; }
+.glc { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .gc { position: absolute; left: 50%; top: 47%; width: var(--cw, 280px); height: auto; display: none; cursor: pointer; will-change: transform, opacity; }
 .ghead { position: absolute; left: clamp(18px, 5vw, 60px); top: calc(64px + env(safe-area-inset-top)); z-index: 200; pointer-events: none; max-width: 38ch; }
 .gtitle { font-size: clamp(24px, 4.4vw, 40px); font-weight: 700; letter-spacing: -.01em; line-height: 1.1; color: #fff; }
@@ -295,6 +296,10 @@ button:disabled { opacity: .45; cursor: default; }
 /* 手指好按：光暈的點按範圍加大到約 46px */
 .orb::before { content: ""; position: absolute; inset: -12px; }
 #gallery.white .gtop { background: linear-gradient(#fff 72%, rgba(255,255,255,0)); padding-bottom: 14px; }
+/* 看單張大圖（深色罩）時，白色模式的白條不要蓋在深色上面 */
+#gallery.white:has(#gview.on) .gtop { background: none; }
+/* 看單張大圖時，後面轉盤的標題與說明文字不要透出來蓋在圖上 */
+#gallery:has(#gview.on) #gstage { visibility: hidden; }
 /* 窄螢幕：改成可捲動、觸控友善的簡單排列，不強行套用桌機的空間構圖 */
 @media (max-width: 760px) {
   .gc { top: 51%; }
@@ -448,6 +453,7 @@ button:disabled { opacity: .45; cursor: default; }
   </div>
 </section>
 
+<script src="old_scores.js"></script>
 <script>
 // ---------- 十標籤（見 綠美圖_十個標籤_轉變與活動.md） ----------
 // g 是推導時的身分（綠／美／圖），介面不顯示，留給之後分析用。
@@ -1841,7 +1847,7 @@ async function tapHeterotopia() {
 // fal 的圖生圖「即時串流（WebSocket）」端點實測沒有回應，所以改成：按下 Heterotopia 後鏡頭一直開著，
 // 一張一張用一般 HTTP 送給 Worker 的 /v1/live，前一張回來就送下一張（實測每張約 3 秒，同時 2 張在路上）。
 // 提示詞先固定，不用標籤（標籤與 CLIP 仍在面板顯示，但不影響這裡畫什麼）。
-const LIVE_PROMPT = 'a dreamlike scene where ordinary objects slowly turn into flowing sand and glass, strange quiet atmosphere, surreal photography, muted warm colors, cinematic, highly detailed';
+const LIVE_PROMPT = 'a surrealist photograph, dreamlike and uncanny, things at the wrong scale, one thing becoming another into hybrid forms, unrelated things placed side by side, shapes emerging from chance marks and textures like frottage, quiet stillness, muted warm colors, film grain, cinematic, highly detailed';
 const LIVE_SIDE = 512;               // 相機連續模式送出的長邊
 const PHOTO_SIDE = 1024;             // V9：上傳單張照片送出的長邊（SDXL 原生 1024；需 V9 Worker，舊 Worker 會把它壓回 768）
 const LIVE_MAX_INFLIGHT = 2;         // 同時在路上的張數（暖機期間只送 1 張）
@@ -1849,6 +1855,9 @@ const LIVE_MIN_GAP_MS = 80;
 const LIVE_TIMEOUT_MS = 20000;
 const LIVE_WARMUP_TIMEOUT_MS = 100000; // 閒置後的第一張很慢（冷啟動），等久一點
 const LIVE_WARMUP_MAX_S = 110;
+const PHOTO_STRENGTH = 0.85;         // 上傳單張照片的改寫幅度（相機即時模式仍用 STRENGTH 0.7）；越高越不像原圖，也越容易把小人物抹掉
+const PHOTO_POLL_MS = 2000;          // V9 佇列模式：多久問一次「好了沒」（問不花錢）
+const PHOTO_MAX_S = 300;             // 單張照片整體最多等 5 分鐘
 const LIVE_SESSION_S = 120;          // 第一張回來後最多跑這麼久，避免忘記關掉一直扣費
 const LIVE_ANIM_DELAY_MS = 1200;     // 等超過這麼久還沒有圖，才播等待動畫；圖回來得快就完全不播
 const LIVE_BACKOFF_MS = 1500;
@@ -1892,21 +1901,78 @@ async function callLive(frame, limitMs) {
       if (body && body.error === 'rate_limited') throw new LiveFatal('Too many pictures per minute. Wait a moment and try again.');
       const e = new Error('fal is busy (429): ' + String((body && (body.detail || body.error)) || text).slice(0, 140)); e.backoff = 6000; throw e;
     }
-    if (!res.ok) throw new Error(describeFailure(res.status, body, text));
+    if (!res.ok) { const e = new Error(describeFailure(res.status, body, text)); if (res.status >= 500) e.retry = true; throw e; }
     return body;
   } catch (e) {
     if (e instanceof LiveFatal) throw e;
-    if (e && e.name === 'AbortError') throw new Error('timed out after ' + Math.round(limitMs / 1000) + ' s');
-    if (e instanceof TypeError) throw new Error('Could not reach the Worker. Check your connection, and that this page’s address is in the Worker’s ALLOWED_ORIGINS.');
+    if (e && e.name === 'AbortError') { const e2 = new Error('timed out after ' + Math.round(limitMs / 1000) + ' s'); e2.retry = true; throw e2; }
+    if (e instanceof TypeError) { const e2 = new Error('Could not reach the Worker. Check your connection, and that this page’s address is in the Worker’s ALLOWED_ORIGINS.'); e2.retry = true; throw e2; }
     throw e;
   } finally { clearTimeout(timer); }
 }
 
+// V9 佇列模式：單張上傳照片（1024、fal 冷啟動可能很久）不再用一條長連線硬等。
+// 1) POST /v1/photo 把任務丟進 fal 佇列，馬上拿到任務編號（只會建立一次任務，只扣一次錢）
+// 2) 每 2 秒 GET /v1/photo/<編號> 問「好了沒」——問一百次都不花錢；單次問失敗就再問，不會重送任務
+// 冷啟動再久也只是多問幾次，不會逾時丟掉。
+async function photoFetch(path, init, limitMs) {
+  const cfg = loadCfg();
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), limitMs);
+  try {
+    const res = await fetch(cfg.url.replace(/\/+$/, '') + path, { ...init, signal: ctl.signal,
+      headers: { Authorization: 'Bearer ' + cfg.token, ...(init.headers || {}) } });
+    const text = await res.text(); let body = null; try { body = JSON.parse(text); } catch (e) {}
+    if (res.status === 401) throw new LiveFatal('The access token was rejected. Go back to the first page and check it in ⚙.');
+    if (res.status === 429 && body && body.error === 'daily_quota_reached') throw new LiveFatal('Today’s live quota is used up.');
+    if (res.status === 404 && path === '/v1/photo') throw new Error('This Worker is the old version (no queue route). Deploy the V9 Worker, and check the Worker address in ⚙ is the "-v9" one: ' + cfg.url);
+    if (!res.ok) { const e = new Error(describeFailure(res.status, body, text)); if (res.status >= 500 || res.status === 429) e.transient = true; throw e; }
+    return body || {};
+  } catch (e) {
+    if (e instanceof LiveFatal) throw e;
+    if (e && e.name === 'AbortError') { const e2 = new Error('The Worker did not answer in time.'); e2.transient = true; throw e2; }
+    if (e instanceof TypeError) { const e2 = new Error('Could not reach the Worker. Check your connection, and that this page’s address is in the Worker’s ALLOWED_ORIGINS.'); e2.transient = true; throw e2; }
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
+async function callLivePhoto(frame, myRun) {
+  if (LIVE_FAKE) return callLive(frame, 1000);                 // ?fake=1 / ?fake=slow 測試模式：沿用假回應
+  const alive = () => myRun === live.run && live.on;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = performance.now() + PHOTO_MAX_S * 1000;
+  // 送出任務：還沒拿到編號就失敗的話，任務根本沒建立，所以可以安全地再送（最多 3 次）
+  let id = null, lastErr;
+  for (let i = 1; i <= 3 && !id; i++) {
+    if (!alive()) throw new LiveFatal('cancelled');
+    try {
+      const j = await photoFetch('/v1/photo', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: frame.url, prompt: LIVE_PROMPT, width: frame.w, height: frame.h, strength: PHOTO_STRENGTH }) }, 45000);
+      id = j.id;
+      if (!id) throw new Error('The Worker did not return a job id. Is the Worker updated to the queue version?');
+    } catch (e) { if (!e.transient) throw e; lastErr = e; await sleep(1500 * i); }
+  }
+  if (!id) throw lastErr;
+  // 輪詢：只問不送。連續 8 次問不到才放棄。
+  let bad = 0;
+  while (alive() && performance.now() < deadline) {
+    await sleep(PHOTO_POLL_MS);
+    if (!alive()) break;
+    try {
+      const j = await photoFetch('/v1/photo/' + encodeURIComponent(id), { method: 'GET' }, 20000);
+      bad = 0;
+      if (j.status === 'done') return j;
+      if (j.status === 'failed') throw new Error('fal could not draw this picture' + (j.detail ? ' — ' + String(j.detail).slice(0, 200) : '.'));
+      $('badge').textContent = j.state === 'IN_PROGRESS' ? 'Painting…' : 'Painting… (waiting in line)';
+    } catch (e) { if (!e.transient || ++bad >= 8) throw e; }
+  }
+  if (!alive()) throw new LiveFatal('cancelled');
+  throw new Error('No picture came back in ' + PHOTO_MAX_S + ' s.');
+}
 async function liveSend(frame, myRun) {
   const mySeq = ++live.seq, t0 = performance.now();
   live.sent++; live.inflight++;
   try {
-    const r = await callLive(frame, live.recv ? LIVE_TIMEOUT_MS : LIVE_WARMUP_TIMEOUT_MS);
+    const r = live.single ? await callLivePhoto(frame, myRun) : await callLive(frame, live.recv ? LIVE_TIMEOUT_MS : LIVE_WARMUP_TIMEOUT_MS);
     if (myRun !== live.run || !live.on) return;
     live.lastLat = performance.now() - t0; live.lats.push(live.lastLat); if (live.lats.length > 40) live.lats.shift();
     live.streak = 0;
@@ -1996,8 +2062,9 @@ function liveStart() {
   if (live.single) freezeFrame();
   else live.animTimer = setTimeout(() => { if (live.on && !live.revealed && !live.revealing) freezeFrame(); }, LIVE_ANIM_DELAY_MS);
   clearTimeout(live.timer);
-  live.endsAt = performance.now() + LIVE_WARMUP_MAX_S * 1000;
-  live.timer = setTimeout(() => liveEnd('<div class="q">No picture came back in time.</div><small>The painter may still be waking up. Try again in a moment.</small>'), LIVE_WARMUP_MAX_S * 1000);
+  const maxS = live.single ? PHOTO_MAX_S : LIVE_WARMUP_MAX_S;
+  live.endsAt = performance.now() + maxS * 1000;
+  live.timer = setTimeout(() => liveEnd('<div class="q">No picture came back in time.</div><small>The painter may still be waking up. Try again in a moment.</small>'), maxS * 1000);
   cancelAnimationFrame(live.raf); live.raf = requestAnimationFrame(liveTick);
 }
 
@@ -2364,8 +2431,124 @@ const gallery = (() => {
   const clampPos = v => Math.max(0, Math.min(Math.max(0, items.length - 1), v));
   const isSmall = () => innerWidth < 700;                       // 手機：卡片放大，中間那張占約六成寬
   const isTouch = matchMedia('(hover: none)').matches;
-  const cardW = () => isSmall() ? Math.min(innerWidth * .6, 280) : Math.min(innerWidth * .36, 300);
+  const cardW = () => isSmall() ? Math.min(innerWidth * .42, 200) : Math.min(innerWidth * .19, 250);   // 帶狀：一排卡片較窄，中間那張再放大
 
+  // ---- WebGL（three.js）連續帶狀 ----
+  // 整排卡片是「同一條」連續的帶子：一個平滑函數把「帶子上的位置 s」對應到螢幕座標與高度，卡片只是這條帶子的一段貼圖，所以——
+  //  · 中間那張的寬、高是最外側的 3 倍（END = 1/3），往兩側每張線性縮小；
+  //  · 中間雖然變形（鼓起的魚眼），左右邊跟鄰居共用同一條邊，接縫一定連續；
+  //  · 兩側每張的上緣、下緣都落在同一條斜線上，一路延伸出螢幕被裁掉。
+  // 用正交鏡頭（畫面座標＝像素）、不是透視，所以大小比例完全由下面的函數決定，不會被鏡頭角度影響。
+  const THREE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+  const GL = { END: 1 / 3, GAP: .035, SIDE: .12, SPAN: 4.5, SIG: .78, ASPECT: .9, on: false, tried: null, ok: undefined, W: 0, H: 0, Hc: 400, U: 360, yOff: 0, cardPx: 240 };
+  // 寬度函數 w(s)：s=0（中間）= 1；往兩側線性縮到 END；中間再疊一個窄窄的隆起（魚眼那一下）
+  const glW = s => { const t = Math.abs(s); return GL.END + GL.SIDE * Math.max(0, 1 - t / GL.SPAN) + (1 - GL.END - GL.SIDE) * Math.exp(-(t / GL.SIG) * (t / GL.SIG)); };
+  // 水平位置 X(s) = ∫ w（累加表，0.02 一格，到 ±8 卡片寬；更遠的照 END 延伸）
+  const GL_STEP = .02, GL_MAXS = 8, GL_TAB = (() => {
+    const n = Math.round(GL_MAXS / GL_STEP), tab = new Float64Array(n + 1);
+    for (let k = 1; k <= n; k++) { const s0 = (k - 1) * GL_STEP, s1 = k * GL_STEP; tab[k] = tab[k - 1] + (glW(s0) + glW(s1)) / 2 * GL_STEP; }
+    return tab;
+  })();
+  function glX(s) {
+    const t = Math.abs(s), sg = s < 0 ? -1 : 1;
+    if (t >= GL_MAXS) return sg * (GL_TAB[GL_TAB.length - 1] + (t - GL_MAXS) * GL.END);
+    const f = t / GL_STEP, k = Math.floor(f);
+    return sg * (GL_TAB[k] + (GL_TAB[k + 1] - GL_TAB[k]) * (f - k));
+  }
+  function glS(x) {                                            // glX 的反函數（二分搜尋）
+    const t = Math.abs(x); let lo = 0, hi = GL_MAXS + t / GL.END + 1;
+    for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (glX(mid) < t) lo = mid; else hi = mid; }
+    return (x < 0 ? -1 : 1) * (lo + hi) / 2;
+  }
+  function ensureGL() {
+    if (GL.tried) return GL.tried;
+    GL.tried = new Promise(resolve => {
+      let settled = false;
+      const fin = ok => { if (settled) return; settled = true; GL.ok = ok; resolve(ok); };
+      const init = () => {
+        try {
+          const T = window.THREE; if (!T) return fin(false);
+          const canvas = document.createElement('canvas'); canvas.className = 'glc';
+          const r = new T.WebGLRenderer({ canvas, antialias: true, alpha: true });
+          r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+          r.outputEncoding = T.sRGBEncoding;
+          GL.T = T; GL.renderer = r; GL.canvas = canvas;
+          GL.scene = new T.Scene(); GL.group = new T.Group(); GL.scene.add(GL.group);
+          GL.camera = new T.OrthographicCamera(-1, 1, 1, -1, .1, 20); GL.camera.position.z = 5;
+          fin(true);
+        } catch (e) { console.warn('webgl unavailable', e); fin(false); }
+      };
+      if (window.THREE) { init(); return; }
+      const s = document.createElement('script'); s.src = THREE_URL; s.onload = init; s.onerror = () => fin(false);
+      document.head.appendChild(s);
+      setTimeout(() => fin(false), 8000);                      // 載太久就放棄，用 2D 版
+    });
+    return GL.tried;
+  }
+  function glClear() {
+    for (const c of cards) if (c.mesh) { GL.group.remove(c.mesh); if (c.mat.map) c.mat.map.dispose(); c.mat.dispose(); c.geo.dispose(); }
+  }
+  // 縮圖 → 512×512 貼圖（內容是 4:5 cover，縱向壓成 0.8，貼到面上時由 UV 拉開；用 2 的次方尺寸，mipmap 在 WebGL1 也行）
+  async function glTexture(c) {
+    if (c.texReq) return; c.texReq = true;
+    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 512;
+    const t = cv.getContext('2d');
+    t.fillStyle = '#1b2220'; t.fillRect(0, 0, 512, 512);
+    t.save(); t.scale(1, .8);
+    let bmp = null;
+    if (c.it.thumb) { try { bmp = await createImageBitmap(c.it.thumb); } catch (e) { try { bmp = await blobImage(c.it.thumb); } catch (e2) {} } }
+    if (bmp) { const sw = bmp.width, sh = bmp.height, s = Math.max(512 / sw, 640 / sh); t.drawImage(bmp, (512 - sw * s) / 2, (640 - sh * s) / 2, sw * s, sh * s); }
+    if (c.it.kind === 'video') {
+      t.fillStyle = 'rgba(20,20,22,.6)'; t.beginPath(); t.arc(256, 320, 56, 0, 7); t.fill();
+      t.fillStyle = '#fff'; t.beginPath(); t.moveTo(256 - 18, 320 - 28); t.lineTo(256 + 30, 320); t.lineTo(256 - 18, 320 + 28); t.fill();
+    }
+    t.restore();
+    if (bmp && bmp.close) bmp.close();
+    if (!c.mat) return;                                        // 已被重畫清掉
+    const T = GL.T, tx = new T.CanvasTexture(cv);
+    tx.encoding = T.sRGBEncoding; tx.anisotropy = 4;
+    c.mat.map = tx; c.mat.color.setScalar(1); c.mat.needsUpdate = true;
+    glRender();
+  }
+  function glRender() { if (GL.on && GL.W) GL.renderer.render(GL.scene, GL.camera); }
+  function glLayout() {
+    const w = rail.clientWidth, h = rail.clientHeight; if (!w || !h) return;
+    if (w !== GL.W || h !== GL.H) {
+      GL.W = w; GL.H = h; GL.renderer.setSize(w, h, false);
+      const cam = GL.camera; cam.left = -w / 2; cam.right = w / 2; cam.top = h / 2; cam.bottom = -h / 2; cam.updateProjectionMatrix();
+    }
+    GL.Hc = Math.min(h * .6, w * .85);                         // 中間那張的高（手機受寬度限制）
+    GL.U = GL.Hc * GL.ASPECT; GL.cardPx = GL.U * .8;
+    GL.yOff = (isSmall() ? .01 : .03) * h;
+    for (const c of cards) {
+      const d = c.i - pos, ad = Math.abs(d);
+      if (ad > 5.8) { if (c.mesh) c.mesh.visible = false; continue; }
+      if (!c.mesh) {
+        const T = GL.T;
+        c.mat = new T.MeshBasicMaterial({ color: 0x1b2220 });
+        c.geo = new T.PlaneGeometry(1, 1, 20, 8); c.mesh = new T.Mesh(c.geo, c.mat); c.mesh.frustumCulled = false; GL.group.add(c.mesh);
+      }
+      c.mesh.visible = true;
+      glTexture(c);
+      const P = c.geo.attributes.position, UV = c.geo.attributes.uv;
+      for (let i = 0; i < P.count; i++) {                      // 每個頂點：s = 帶子上的位置 → 螢幕 x、高度
+        const s = d + (UV.getX(i) - .5) * (1 - GL.GAP);   // 每張只占自己那一格的 (1 - GAP)，留一條小縫
+        P.setXYZ(i, GL.U * glX(s), (UV.getY(i) - .5) * GL.Hc * glW(s) + GL.yOff, 0);
+      }
+      P.needsUpdate = true;
+      if (c.mat.map) c.mat.color.setScalar(ad < .4 ? 1 : Math.max(.55, 1 - ad * .1));
+    }
+    GL.renderer.render(GL.scene, GL.camera);
+  }
+  // 螢幕座標 → 被點到的卡片編號（沒點到回 -1）：反推帶子上的位置 s
+  function glPick(cx, cy) {
+    if (!GL.on || !GL.W) return -1;
+    const r = rail.getBoundingClientRect();
+    const s = glS((cx - r.left - GL.W / 2) / GL.U), i = Math.round(pos + s);
+    if (i < 0 || i >= cards.length) return -1;
+    const y = (r.top + GL.H / 2 - cy) - GL.yOff;
+    return Math.abs(y) <= .5 * GL.Hc * glW(s) ? i : -1;
+  }
   // 畫一張卡：縮圖 cover 填滿 4:5，再用 2px 直條重畫，中間條比兩邊高一點（桶狀），上下緣就變成微微的弧
   async function paintCard(c) {
     if (c.drawn) return; c.drawn = true;
@@ -2379,31 +2562,48 @@ const gallery = (() => {
       t.fillStyle = 'rgba(20,20,22,.6)'; t.beginPath(); t.arc(CW / 2, CH / 2, 26, 0, 7); t.fill();
       t.fillStyle = '#fff'; t.beginPath(); t.moveTo(CW / 2 - 8, CH / 2 - 13); t.lineTo(CW / 2 + 14, CH / 2); t.lineTo(CW / 2 - 8, CH / 2 + 13); t.fill();
     }
-    const g = c.el.getContext('2d'), STRIP = 2;
-    g.clearRect(0, 0, CW, CH);
-    for (let x = 0; x < CW; x += STRIP) {
-      const u = (x + STRIP / 2) / CW * 2 - 1, h = CH * (.9 + .1 * (1 - u * u));
-      g.drawImage(tmp, x, 0, STRIP, CH, x, (CH - h) / 2, STRIP, h);
-    }
+    c.tmp = tmp; c.bq = -1;
     if (bmp && bmp.close) bmp.close();
+    drawBulge(c, c.wantB || 0);
+  }
+  // 只有正中間那張是「魚眼」（上下緣微凸的弧線），其他張是平的，靠側轉的透視變形；b = 0（平）…1（最凸）。
+  // 上下緣用貝茲曲線裁出來，邊緣有抗鋸齒；b 量化成 0.05 一級，只有變化時才重畫。
+  function drawBulge(c, b) {
+    if (!c.tmp) { c.wantB = b; return; }
+    const q = Math.round(b * 20); if (q === c.bq) return; c.bq = q;
+    const g = c.el.getContext('2d'), m = CH * .09 * (q / 20);
+    g.clearRect(0, 0, CW, CH);
+    g.save();
+    g.beginPath();
+    g.moveTo(0, m); g.quadraticCurveTo(CW / 2, -m, CW, m);
+    g.lineTo(CW, CH - m); g.quadraticCurveTo(CW / 2, CH + m, 0, CH - m);
+    g.closePath(); g.clip();
+    g.drawImage(c.tmp, 0, 0);
+    g.restore();
   }
 
+  // 排成一個圓柱外側的連續牆：每張相鄰的邊剛好相接（弦長 = 卡片寬），中間那張正對、兩側依序側轉
   function layout() {
+    if (GL.on) { glLayout(); captionUpdate(); return; }
     const W = cardW();
     rail.style.setProperty('--cw', W + 'px');
+    const step = isSmall() ? 20 : 17, R = 1.04 * W / (2 * Math.sin(step * Math.PI / 360));   // 小角度 = 平緩的帶子，不是圓柱
     for (const c of cards) {
       const d = c.i - pos, ad = Math.abs(d);
-      if (ad > 4.6) { if (c.vis) { c.el.style.display = 'none'; c.vis = false; } continue; }
+      if (ad > 3.5) { if (c.vis) { c.el.style.display = 'none'; c.vis = false; } continue; }
       if (!c.vis) { c.el.style.display = 'block'; c.vis = true; }
       paintCard(c);
-      const x = d * W * .9, z = -Math.min(ad, 3) * W * .5;
-      const ry = Math.max(-64, Math.min(64, d * (isSmall() ? 34 : 40)));
-      const sc = .8 + .3 * Math.exp(-d * d * 1.3);          // 中間最大（約 1.1），兩側縮到 0.8 左右
-      c.el.style.transform = `translate(-50%,-50%) translate3d(${x.toFixed(1)}px,0,${z.toFixed(1)}px) rotateY(${ry.toFixed(1)}deg) scale(${sc.toFixed(3)})`;
+      drawBulge(c, Math.max(0, 1 - ad));
+      const a = Math.max(-86, Math.min(86, d * step));
+      const sc = 1 + .45 * Math.exp(-d * d * 3);             // 中間那張明顯放大（約 1.45 倍）
+      const push = Math.sign(d) * W * .24 * (1 - Math.exp(-d * d * 4));   // 把鄰居往外推，讓放大的中間那張不蓋住它們
+      c.el.style.transform = `translate(-50%,-50%) translateX(${push.toFixed(1)}px) translateZ(${(-R).toFixed(1)}px) rotateY(${a.toFixed(2)}deg) translateZ(${R.toFixed(1)}px) scale(${sc.toFixed(3)})`;
       c.el.style.zIndex = String(100 - Math.round(ad * 10));
-      c.el.style.opacity = String(Math.max(0, Math.min(1, 1.2 - ad * .26)).toFixed(2));
-      c.el.style.filter = ad < .4 ? 'none' : `brightness(${Math.max(.45, 1 - ad * .16).toFixed(2)})`;
-    }
+      c.el.style.opacity = String(Math.max(0, Math.min(1, (3.5 - ad) / 1.1)).toFixed(2));
+      c.el.style.filter = ad < .4 ? 'none' : `brightness(${Math.max(.55, 1 - ad * .1).toFixed(2)})`;
+    }    captionUpdate();
+  }
+  function captionUpdate() {
     const it = items[Math.round(pos)];
     $('gcap').innerHTML = it ? `${it.kind === 'video' ? 'VIDEO' : 'PHOTO'} · ${fmt(it.createdAt)}<small>${Math.round(pos) + 1} / ${items.length} · ${isTouch ? 'swipe to move · tap the centre to open · press and hold to delete' : 'scroll to move · click the centre to open · right-click to delete'}</small>` : '';
   }
@@ -2418,12 +2618,16 @@ const gallery = (() => {
   const snapSoon = () => { clearTimeout(snapTimer); snapTimer = setTimeout(() => { target = clampPos(Math.round(target)); kick(); }, 140); };
 
   async function render(keepIndex) {
-    rail.textContent = ''; cards = [];
+    glClear(); rail.textContent = ''; cards = [];
+    const useGL = (await ensureGL()) && GL.ok === true;
+    GL.on = useGL;
+    if (useGL) rail.appendChild(GL.canvas);
     let all = [];
     try { all = await list(); } catch (e) { console.warn('gallery open failed', e); }
-    items = all.reverse();                                   // 最舊在左、最新在右
+    items = all;                                             // 最新在最左（第一張），越舊越往右
     $('gempty').hidden = items.length > 0;
     items.forEach((it, i) => {
+      if (useGL) { cards.push({ it, i }); return; }
       const el = document.createElement('canvas'); el.width = CW; el.height = CH; el.className = 'gc';
       const c = { it, i, el, drawn: false, vis: false };
       el.addEventListener('click', () => {
@@ -2433,7 +2637,7 @@ const gallery = (() => {
       el.addEventListener('contextmenu', e => { e.preventDefault(); showMenu(e.clientX, e.clientY, it); });
       rail.appendChild(el); cards.push(c);
     });
-    pos = target = clampPos(keepIndex == null ? items.length - 1 : keepIndex);
+    pos = target = clampPos(keepIndex == null ? 2 : keepIndex);   // 剛打開：停在最近的第三張（不足三張就停在最後一張）
     layout();
   }
   // 兩種 Gallery：dark = 今天起存下的新作品（弧形走廊）；white = 舊作品 120 張，依十個標籤排序。小光暈切換，記住上次的選擇。
@@ -2477,7 +2681,9 @@ const gallery = (() => {
     const sx = e.clientX, sy = e.clientY;
     clearTimeout(pressTimer);
     pressTimer = setTimeout(() => {
-      const el = document.elementFromPoint(sx, sy), c = el && el.closest && el.classList.contains('gc') ? cards.find(k => k.el === el) : null;
+      let c = null;
+      if (GL.on) { const gi = glPick(sx, sy); c = gi >= 0 ? cards[gi] : null; }
+      else { const el = document.elementFromPoint(sx, sy); c = el && el.closest && el.classList.contains('gc') ? cards.find(k => k.el === el) : null; }
       if (c) { dragged = true; showMenu(sx, sy, c.it); }
     }, 650);
   });
@@ -2491,7 +2697,8 @@ const gallery = (() => {
   let wdata = null, wsel = null, wcards = [], wlabelEls = [], wsig = null, wurls = [];
   async function loadWhite() {
     if (wdata) return wdata;
-    try { wdata = await (await fetch('old_scores.json')).json(); } catch (e) { wdata = { labels: [], items: [] }; }
+    // 直接開檔案（file://）時瀏覽器不准 fetch 本機 json，所以另附 old_scores.js 當備援
+    try { wdata = await (await fetch('old_scores.json')).json(); } catch (e) { wdata = window.OLD_SCORES || { labels: [], items: [] }; }
     return wdata;
   }
   const top3Of = it => [...it.p.keys()].filter(i => it.p[i] > 0).sort((a, b) => it.p[b] - it.p[a]).slice(0, 3);
@@ -2674,12 +2881,12 @@ const gallery = (() => {
     $('gview').classList.add('on');
   }
 
-  // 滾輪（觸控板橫滑也可以）：往下 = 圖片往右移
+  // 滾輪（觸控板橫滑也可以）：最新在最左，往下 = 看更舊的（圖片往左移）
   stage.addEventListener('wheel', e => {
     if ($('gview').classList.contains('on')) return;
     e.preventDefault();
     const k = e.deltaMode === 1 ? 30 : 1;
-    const v = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? -e.deltaY * k : e.deltaX * k;
+    const v = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY * k : e.deltaX * k;
     target = clampPos(target + v * .004);
     kick(); snapSoon();
   }, { passive: false });
@@ -2690,7 +2897,7 @@ const gallery = (() => {
     if (!drag) return;
     const dx = e.clientX - drag.x;
     if (Math.abs(dx) > 6) dragged = true;
-    if (dragged) { target = clampPos(drag.t - dx / (cardW() * .8)); kick(); }
+    if (dragged) { target = clampPos(drag.t - dx / ((GL.on ? GL.cardPx : cardW()) * .8)); kick(); }
   });
   addEventListener('pointerup', () => { if (!drag) return; drag = null; if (dragged) snapSoon(); setTimeout(() => { dragged = false; }, 0); });
   addEventListener('keydown', e => {
@@ -2698,6 +2905,17 @@ const gallery = (() => {
     if (e.key === 'ArrowLeft') { target = clampPos(Math.round(target) - 1); kick(); }
     else if (e.key === 'ArrowRight') { target = clampPos(Math.round(target) + 1); kick(); }
     else if (e.key === 'Enter' && items[Math.round(pos)]) view(items[Math.round(pos)]);
+  });
+  // WebGL 版：卡片不是 DOM 元素，點擊／右鍵用射線判斷點到哪一張
+  stage.addEventListener('click', e => {
+    if (!GL.on || dragged) return;
+    const i = glPick(e.clientX, e.clientY); if (i < 0) return;
+    if (Math.round(pos) === i) view(items[i]); else { target = i; kick(); }
+  });
+  stage.addEventListener('contextmenu', e => {
+    if (!GL.on) return;
+    const i = glPick(e.clientX, e.clientY); if (i < 0) return;
+    e.preventDefault(); showMenu(e.clientX, e.clientY, items[i]);
   });
   addEventListener('resize', () => { if (root.classList.contains('on')) layout(); });
 
