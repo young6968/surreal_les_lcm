@@ -250,6 +250,8 @@ button:disabled { opacity: .45; cursor: default; }
 #gstage { position: absolute; inset: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
   background: radial-gradient(ellipse at 50% 55%, #161b1d 0, #000 72%); }
 #grail { position: absolute; inset: 0; perspective: 1000px; perspective-origin: 50% 46%; }
+.gzip { padding: 8px 16px; border-radius: 999px; background: rgba(255,255,255,.14); color: #fff; font-size: 13px; }
+#gallery.white .gzip, #gallery:has(#gview.on) .gzip { display: none; }
 .glc { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .gc { position: absolute; left: 50%; top: 47%; width: var(--cw, 280px); height: auto; display: none; cursor: pointer; will-change: transform, opacity; }
 .ghead { position: absolute; left: clamp(18px, 5vw, 60px); top: calc(64px + env(safe-area-inset-top)); z-index: 200; pointer-events: none; max-width: 38ch; }
@@ -408,7 +410,8 @@ button:disabled { opacity: .45; cursor: default; }
   <div class="gtop"><div class="gl">
     <div id="galleryBack" class="brand" role="button" aria-label="Close the gallery">‹ Gallery</div>
     <button id="galleryMode" class="orb" aria-label="Switch between the dark and the white gallery" title="Dark gallery: your new works · White gallery: earlier works by label"></button>
-  </div></div>
+  </div>
+  <button id="galleryZip" class="gzip" title="Download every photo work: the original and the generated picture, in one zip">Download all</button></div>
   <div id="gstage">
     <div id="grail"></div>
     <div class="ghead">
@@ -454,6 +457,8 @@ button:disabled { opacity: .45; cursor: default; }
 </section>
 
 <script src="old_scores.js"></script>
+<script src="clip_text.js"></script>
+<script src="clip_refs.js"></script>
 <script>
 // ---------- 十標籤（見 綠美圖_十個標籤_轉變與活動.md） ----------
 // g 是推導時的身分（綠／美／圖），介面不顯示，留給之後分析用。
@@ -940,6 +945,10 @@ const eyes = (() => {
 // 越像描述，濃度越高；再乘上「這看起來像不像綠美圖那種建築」，所以餐廳、桌面、手都會偏低。
 // 校正值：用 333 張照片（原本的 120 張 + fb / ins / th 資料夾裡 213 張不重複的）算出每個標籤的平均 mu 與標準差 sd
 const CAL = {"chuantang":{"mu":0.83,"sd":1.502},"jietian":{"mu":0.739,"sd":1.348},"shawang":{"mu":2.014,"sd":1.612},"raoyou":{"mu":0.64,"sd":1.575},"zhanren":{"mu":0.957,"sd":1.554},"shaiguang":{"mu":1.757,"sd":1.519},"zizhan":{"mu":-0.068,"sd":2.088},"fangsheng":{"mu":-0.932,"sd":1.912},"liuren":{"mu":-1.443,"sd":1.187},"sanjia":{"mu":-0.27,"sd":1.17}};
+// 直接開檔案（file://）時瀏覽器不准 fetch 本機 json，所以另附同內容的 .js（window.XXX）當備援；放到網路上時照舊用 fetch。
+async function jsonOrEmbedded(file, key) {
+  try { return await (await fetch(file)).json(); } catch (e) { if (window[key]) return window[key]; throw e; }
+}
 const clip = (() => {
   const TF = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2';
   const MODEL = 'Xenova/clip-vit-base-patch32';
@@ -960,7 +969,7 @@ const clip = (() => {
   let refs = null;
   async function loadRefs() {
     try {
-      const j = await (await fetch('clip_refs.json')).json();
+      const j = await jsonOrEmbedded('clip_refs.json', 'CLIP_REFS');
       const bin = atob(j.data), bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const q = new Int16Array(bytes.buffer, 0, bytes.length >> 1);
@@ -987,7 +996,7 @@ const clip = (() => {
   function load() {
     if (loading) return loading;
     loading = (async () => {
-      text = await (await fetch('clip_text.json')).json();
+      text = await jsonOrEmbedded('clip_text.json', 'CLIP_TEXT');
       refs = await loadRefs();
       T = await import(TF);
       T.env.allowLocalModels = false;
@@ -1847,15 +1856,43 @@ async function tapHeterotopia() {
 // fal 的圖生圖「即時串流（WebSocket）」端點實測沒有回應，所以改成：按下 Heterotopia 後鏡頭一直開著，
 // 一張一張用一般 HTTP 送給 Worker 的 /v1/live，前一張回來就送下一張（實測每張約 3 秒，同時 2 張在路上）。
 // 提示詞先固定，不用標籤（標籤與 CLIP 仍在面板顯示，但不影響這裡畫什麼）。
-const LIVE_PROMPT = 'a surrealist photograph, dreamlike and uncanny, things at the wrong scale, one thing becoming another into hybrid forms, unrelated things placed side by side, shapes emerging from chance marks and textures like frottage, quiet stillness, muted warm colors, film grain, cinematic, highly detailed';
-const LIVE_SIDE = 512;               // 相機連續模式送出的長邊
+const LIVE_PROMPT = 'a surrealist artwork: familiar things combined in impossible ways, one object turning into another, unexpected shifts of scale, dreamlike and uncanny, striking, high contrast, crisp detail';
+// 上傳照片的提示詞：取畫面上分數最高的 1–2 個標籤，各接一句「原型 + 可量的變化推到極端」（見 w9-1 形式目錄的標籤帶）。
+// 句子不寫沙、玻璃，也不新增無關物件，只對照片裡本來就有的東西做極端處理。每句約 20 個 token，兩句加基本詞約 55，仍在模型 77 個 token 內。
+const LABEL_PHRASE = {
+  chuantang: 'every wall is opened until only the frame remains, no inside, no outside',
+  jietian: 'the roof is replaced by weather, cloud and rain drifting indoors',
+  shawang: 'dozens of thin layers hang in a row, each showing the distance differently',
+  raoyou: 'the path returns to its start again and again, endlessly',
+  zhanren: 'the floors multiply upward impossibly high, a person posing on each level',
+  shaiguang: 'a net of countless tiny holes, only a few spots of light get through',
+  zizhan: 'one ordinary object stands alone on a high block, empty space around it, like a shrine',
+  fangsheng: 'floors stack upward, a gathering on every level, the noise rising as haze',
+  liuren: 'the soft slope is steeper than anything could rest on, people lounging on it anyway',
+  sanjia: 'the tall stack is broken into many loose units, piled together unsorted',
+};
+function photoPrompt() {
+  const top = ranked(), pick = [];                            // ranked()：目前畫面上各標籤的濃度，高到低
+  // 寬鬆規則：第一名至少有一點濃度才採用；第二名要有第一名的一半才一起用。都不夠就退回通用句，不擋任何東西。
+  if (top[0] && top[0].v >= .10 && LABEL_PHRASE[top[0].id]) {
+    pick.push(top[0]);
+    if (top[1] && top[1].v >= .10 && top[1].v >= top[0].v * .5 && LABEL_PHRASE[top[1].id]) pick.push(top[1]);
+  }
+  // 原照片裡偵測到人，就在提示詞裡點名「人要留著」：圖生圖對提示詞沒提到的東西會丟掉，小小的人最容易被抹掉。沒偵測到就不加。
+  let people = false;
+  try { const s = eyes.snapshot(); people = !!(s.on && s.done && s.dets.some(d => d.name === 'person' && d.score >= .4)); } catch (e) {}
+  let prompt = pick.length ? 'a surrealist artwork, ' + pick.map(p => LABEL_PHRASE[p.id]).join(', ') + ', dreamlike and uncanny, striking, high contrast, crisp detail' : LIVE_PROMPT;
+  if (people) prompt += ', the people stay clearly visible';
+  window.lastDream = { prompt, picks: pick.map(p => p.id), people };  // 除錯：console 輸入 lastDream 看剛剛送了什麼
+  return prompt;
+}const LIVE_SIDE = 512;               // 相機連續模式送出的長邊
 const PHOTO_SIDE = 1024;             // V9：上傳單張照片送出的長邊（SDXL 原生 1024；需 V9 Worker，舊 Worker 會把它壓回 768）
 const LIVE_MAX_INFLIGHT = 2;         // 同時在路上的張數（暖機期間只送 1 張）
 const LIVE_MIN_GAP_MS = 80;
 const LIVE_TIMEOUT_MS = 20000;
 const LIVE_WARMUP_TIMEOUT_MS = 100000; // 閒置後的第一張很慢（冷啟動），等久一點
 const LIVE_WARMUP_MAX_S = 110;
-const PHOTO_STRENGTH = 0.85;         // 上傳單張照片的改寫幅度（相機即時模式仍用 STRENGTH 0.7）；越高越不像原圖，也越容易把小人物抹掉
+const PHOTO_STRENGTH = 0.8;        // 上傳單張照片的改寫幅度（相機即時模式仍用 STRENGTH 0.7）；越高越不像原圖，也越容易把小人物抹掉
 const PHOTO_POLL_MS = 2000;          // V9 佇列模式：多久問一次「好了沒」（問不花錢）
 const PHOTO_MAX_S = 300;             // 單張照片整體最多等 5 分鐘
 const LIVE_SESSION_S = 120;          // 第一張回來後最多跑這麼久，避免忘記關掉一直扣費
@@ -1946,7 +1983,7 @@ async function callLivePhoto(frame, myRun) {
     if (!alive()) throw new LiveFatal('cancelled');
     try {
       const j = await photoFetch('/v1/photo', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: frame.url, prompt: LIVE_PROMPT, width: frame.w, height: frame.h, strength: PHOTO_STRENGTH }) }, 45000);
+        body: JSON.stringify({ image: frame.url, prompt: photoPrompt(), width: frame.w, height: frame.h, strength: PHOTO_STRENGTH }) }, 45000);
       id = j.id;
       if (!id) throw new Error('The Worker did not return a job id. Is the Worker updated to the queue version?');
     } catch (e) { if (!e.transient) throw e; lastErr = e; await sleep(1500 * i); }
@@ -1962,7 +1999,9 @@ async function callLivePhoto(frame, myRun) {
       bad = 0;
       if (j.status === 'done') return j;
       if (j.status === 'failed') throw new Error('fal could not draw this picture' + (j.detail ? ' — ' + String(j.detail).slice(0, 200) : '.'));
-      $('badge').textContent = j.state === 'IN_PROGRESS' ? 'Painting…' : 'Painting… (waiting in line)';
+      const sec = Math.round((performance.now() - (deadline - PHOTO_MAX_S * 1000)) / 1000);
+      $('badge').textContent = j.state === 'IN_PROGRESS' ? `Painting… ${sec}s` : `Waiting in line… ${sec}s${j.position != null ? ' (#' + (j.position + 1) + ')' : ''}${j.state === 'UNKNOWN' ? ' ?' : ''}`;
+      if (sec % 20 < 3) console.info('[photo]', j.state, j.position, j.detail || '');
     } catch (e) { if (!e.transient || ++bad >= 8) throw e; }
   }
   if (!alive()) throw new LiveFatal('cancelled');
@@ -2920,6 +2959,68 @@ const gallery = (() => {
   addEventListener('resize', () => { if (root.classList.contains('on')) layout(); });
 
 
+  // ---- 一次下載「生成前 + 生成後」（打包成一個 zip，瀏覽器只會跳一次下載）----
+  // zip 用最簡單的「不壓縮」格式，自己寫，不靠外部程式庫；圖片本來就壓縮過，壓了也不會小。
+  const CRC_TAB = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = u8 => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TAB[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  async function makeZip(files) {                              // files: [{ name, blob }]
+    const enc = new TextEncoder(), parts = [], central = [], d = new Date();
+    const dt = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(), tm = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    let offset = 0;
+    for (const f of files) {
+      const data = new Uint8Array(await f.blob.arrayBuffer()), name = enc.encode(f.name), crc = crc32(data);
+      const lh = new DataView(new ArrayBuffer(30));
+      lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+      lh.setUint16(10, tm, true); lh.setUint16(12, dt, true); lh.setUint32(14, crc, true); lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true);
+      lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+      parts.push(lh.buffer, name, data);
+      const ch = new DataView(new ArrayBuffer(46));
+      ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+      ch.setUint16(12, tm, true); ch.setUint16(14, dt, true); ch.setUint32(16, crc, true); ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true);
+      ch.setUint16(28, name.length, true); ch.setUint32(42, offset, true);
+      central.push(ch.buffer, name);
+      offset += 30 + name.length + data.length;
+    }
+    const csize = central.reduce((a, b) => a + b.byteLength, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, csize, true); end.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, end.buffer], { type: 'application/zip' });
+  }
+  const stampOf = t => { const d = new Date(t), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+  const extOf = blob => (blob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg').split(';')[0];
+  // 一張作品要打包的檔案：before = 原照片、after = 生成圖（有分析圖就一起放）；放在以時間命名的資料夾裡
+  function pairFiles(it, bl, prefix) {
+    const dir = (prefix || '') + stampOf(it.createdAt) + '/', out = [];
+    if (bl.original) out.push({ name: dir + 'before.' + extOf(bl.original), blob: bl.original });
+    if (bl.result) out.push({ name: dir + 'after.' + extOf(bl.result), blob: bl.result });
+    if (bl.analysis) out.push({ name: dir + 'analysis.' + extOf(bl.analysis), blob: bl.analysis });
+    return out;
+  }
+  function saveBlob(blob, name) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+  }
+  // 整個黑畫廊（所有照片作品）一次下載
+  let zipBusy = false;
+  $('galleryZip').addEventListener('click', async () => {
+    if (zipBusy) return;
+    const photos = items.filter(x => x.kind !== 'video');
+    if (!photos.length) return toast('There are no photos in the Gallery yet.', 3000);
+    zipBusy = true; const btn = $('galleryZip'), label = btn.textContent;
+    try {
+      const files = [];
+      for (let i = 0; i < photos.length; i++) {
+        btn.textContent = `Preparing ${i + 1}/${photos.length}…`;
+        const bl = await blobsOf(photos[i].id); if (bl) files.push(...pairFiles(photos[i], bl));
+      }
+      if (!files.length) return toast('Nothing to download.', 3000);
+      btn.textContent = 'Zipping…';
+      saveBlob(await makeZip(files), `surreallens-gallery-${stampOf(Date.now())}.zip`);
+      toast(`Downloaded ${photos.length} works (before + after).`, 3500);
+    } catch (e) { console.warn('gallery zip failed', e); toast('Could not make the zip.', 4000); }
+    btn.textContent = label; zipBusy = false;
+  });
+
   // ---- 檢視 ----
   let viewUrls = [], cur = null;
   function closeView() {
@@ -2958,7 +3059,18 @@ const gallery = (() => {
       try { await deleteItem(cur.it); } catch (e) { toast('Could not delete it.', 3000); return; }
       closeView(); if (gmode === 'white') renderWhite(); else render();
     });
-    bar.append(save, del);
+    bar.append(save);
+    if (it.kind !== 'video' && bl.original && bl.result) {
+      const both = document.createElement('button'); both.textContent = 'Save before + after';
+      both.addEventListener('click', async () => {
+        both.disabled = true;
+        try { saveBlob(await makeZip(pairFiles(cur.it, cur.bl)), `surreallens-${stampOf(cur.it.createdAt)}.zip`); }
+        catch (e) { console.warn('zip failed', e); toast('Could not make the zip.', 3000); }
+        both.disabled = false;
+      });
+      bar.append(both);
+    }
+    bar.append(del);
     $('gview').classList.add('on');
     show(tabs[0][0]);
   }
